@@ -1,0 +1,36 @@
+name: Court booking scheduler
+
+on:
+  # Ejecutar todos los días a las 21:30 UTC
+  # (en invierno coincide con 21:30 Londres; en verano será 22:30 Londres)
+  schedule:
+    - cron: '30 21 * * *'
+  # Permite lanzarlo a mano desde la pestaña "Actions"
+  workflow_dispatch:
+
+jobs:
+  run-scheduler:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scheduler
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Estos los usaremos cuando enganchemos Better
+          BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
+          BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
+        run: python run_scheduler.py
