@@ -12,6 +12,14 @@ def parse_time_str(t: str) -> time:
     # Esperamos formato 'HH:MM:SS'
     return datetime.strptime(t, "%H:%M:%S").time()
 
+def clean_slug(value: str) -> str:
+    """
+    Limpia un slug que pueda haber llegado con comillas o espacios:
+    "'islington-tennis-centre'" → "islington-tennis-centre"
+    """
+    if not isinstance(value, str):
+        return value
+    return value.strip().strip("'\"")
 
 def should_process_request(req: dict, now: datetime) -> str:
     """
@@ -155,8 +163,8 @@ def probe_better_slots_for_request(req: dict) -> str:
 
     try:
         slots = client.get_available_slots_for(
-            venue=BetterVenue(venue_slug),
-            activity=BetterActivity(activity_slug),
+            venue=BetterVenue(clean_slug(venue_slug)),
+            activity=BetterActivity(clean_slug(activity_slug)),
             activity_date=target_date,
             start_time=start_time,
             end_time=end_time,
@@ -231,8 +239,8 @@ def book_best_slot_for_request(req: dict) -> str:
     # 1) Obtener slots disponibles en esa franja
     try:
         slots = client.get_available_slots_for(
-            venue=BetterVenue(venue_slug),
-            activity=BetterActivity(activity_slug),
+            venue=BetterVenue(clean_slug(venue_slug)),
+            activity=BetterActivity(clean_slug(activity_slug)),
             activity_date=target_date,
             start_time=start_time,
             end_time=end_time,
