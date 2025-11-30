@@ -218,20 +218,24 @@ def book_best_slot_for_request(req: dict) -> str:
 
     client = LiveBetterClient(username=username, password=password)
 
-    venue_slug = req["venue_slug"]
-    activity_slug = req["activity_slug"]
+    # 🔥 SLUGS DEBEN VENIR LIMPIOS
+    venue_slug_raw = req["venue_slug"]
+    activity_slug_raw = req["activity_slug"]
+
+    venue_slug = clean_slug(venue_slug_raw)
+    activity_slug = clean_slug(activity_slug_raw)
+
     target_date = date.fromisoformat(req["target_date"])
 
     # En la BD los tiempos están como '19:00:00'
-    start_raw = str(req["target_start_time"])    # '19:00:00'
-    end_raw = str(req["target_end_time"])        # '20:00:00'
+    start_raw = str(req["target_start_time"])  
+    end_raw = str(req["target_end_time"])      
 
-    start_pretty = start_raw[:5]                 # '19:00'
-    end_pretty = end_raw[:5]                     # '20:00'
+    start_pretty = start_raw[:5]               
+    end_pretty = end_raw[:5]                   
 
-    # parse_time espera 'HHMM'
-    start_str = start_pretty.replace(":", "")    # '1900'
-    end_str = end_pretty.replace(":", "")        # '2000'
+    start_str = start_pretty.replace(":", "")  
+    end_str = end_pretty.replace(":", "")      
 
     try:
         start_time = parse_time(start_str)
@@ -290,6 +294,7 @@ def book_best_slot_for_request(req: dict) -> str:
     )
 
 
+
 def main() -> int:
     start_run = datetime.now(timezone.utc)
     print(f"[Scheduler] Ejecutando a las {start_run.isoformat()}")
@@ -323,38 +328,36 @@ def main() -> int:
         elif action == "PROCESS":
             print(f"[Scheduler] >>> Toca procesar request {rid} ahora mismo.")
 
-            # Nuevo flag: solo reservamos de verdad si ENABLE_BETTER_BOOKING == 'true'
+            # Flag para activar o no el booking real
             enable_booking = os.environ.get("ENABLE_BETTER_BOOKING", "").lower() == "true"
 
             if enable_booking:
-                # 🔥 MODO RESERVA REAL
+                # 🔥 MODO BOOKING REAL
                 message = book_best_slot_for_request(req)
                 print(f"[Scheduler] Resultado BOOKING para {rid}: {message}")
 
+                # Status válidos en la tabla: PENDING, SEARCHING, BOOKED, EXPIRED, FAILED
                 if message.startswith("BOOKING_OK"):
                     new_status = "BOOKED"
                 elif message.startswith("BOOKING_NO_SLOTS"):
-                    # No hay slots ahora mismo → seguimos en SEARCHING
                     new_status = "SEARCHING"
                 elif message.startswith("ERROR_BOOKING_"):
-                    new_status = "ERROR"
+                    new_status = "FAILED"
                 else:
-                    # fallback genérico
-                    new_status = "ERROR"
+                    # fallback defensivo
+                    new_status = "FAILED"
             else:
-                # 🔍 MODO RADAR SOLO LECTURA (lo que ya tenías)
+                # 🔍 SOLO RADAR (lo que acabas de ver en el log)
                 message = probe_better_slots_for_request(req)
                 print(f"[Scheduler] Resultado del radar Better para {rid}: {message}")
 
-                if message.startswith("ERROR"):
-                    new_status = "ERROR"
-                else:
-                    new_status = "SEARCHING"
+                # En modo radar nunca cambiamos a ERROR para no romper el check
+                new_status = "SEARCHING"
 
             try:
                 updated = update_request_seen(
                     rid,
-                    new_status="SEARCHING",
+                    new_status=new_status,
                     last_error=message,
                 )
                 print(
@@ -365,6 +368,7 @@ def main() -> int:
             except Exception as e:
                 print(f"[Scheduler] Error al actualizar {rid}: {e}", file=sys.stderr)
                 continue
+
 
 
     end_run = datetime.now(timezone.utc)
