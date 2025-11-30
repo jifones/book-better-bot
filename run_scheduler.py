@@ -354,7 +354,7 @@ def main() -> int:
             try:
                 updated = update_request_seen(
                     rid,
-                    new_status=new_status,
+                    new_status="SEARCHING",
                     last_error=message,
                 )
                 print(
