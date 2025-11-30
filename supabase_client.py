@@ -51,15 +51,25 @@ def get_pending_requests(limit: int = 10) -> List[Dict[str, Any]]:
     return response.json()
 
 
-def update_request_seen(request_id: str, new_status: Optional[str] = None) -> Dict[str, Any]:
+def update_request_seen(
+    request_id: str,
+    new_status: str | None = None,
+    last_error: str | None = None,
+) -> Dict[str, Any]:
     """
     Actualiza una request marcando que el bot la ha revisado:
     - last_run_at = ahora (UTC)
     - attempt_count = attempt_count + 1
     - status = 'SEARCHING' (por defecto) o lo que pases en new_status
-
-    Devuelve la fila actualizada.
+    - last_error opcional, para guardar mensaje del radar Better
     """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Empieza con los campos que siempre actualizas
+    fields: dict = {
+        "last_run_at": now_iso,
+    }
+    
     # 1) Obtener la fila actual para saber attempt_count
     get_url = f"{REST_URL}/court_booking_requests"
     get_params = {"id": f"eq.{request_id}"}
@@ -84,6 +94,9 @@ def update_request_seen(request_id: str, new_status: Optional[str] = None) -> Di
     }
     if new_status is not None:
         payload["status"] = new_status
+    if last_error is not None:
+        # guardamos el mensaje del radar / error
+        payload["last_error"] = last_error
 
     patch_url = f"{REST_URL}/court_booking_requests"
     patch_params = {"id": f"eq.{request_id}"}
@@ -113,6 +126,7 @@ def update_request_seen(request_id: str, new_status: Optional[str] = None) -> Di
         raise RuntimeError(f"No se devolvieron filas actualizadas para id={request_id}")
 
     return updated_rows[0]
+
 
 
 if __name__ == "__main__":

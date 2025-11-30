@@ -5,17 +5,21 @@ import os
 from book_better.better.live_client import LiveBetterClient
 from book_better.enums import BetterActivity, BetterVenue
 from book_better.utils import parse_time
-from supabase_client import get_pending_requests, update_request_seen
+from supabase_client import (
+    get_pending_requests,
+    update_request_seen,
+    mark_request_expired,
+)
 
 
 def parse_time_str(t: str) -> time:
     # Esperamos formato 'HH:MM:SS'
     return datetime.strptime(t, "%H:%M:%S").time()
 
-def clean_slug(value: str) -> str:
+def clean_slug(value):
     """
     Limpia un slug que pueda haber llegado con comillas o espacios:
-    "'islington-tennis-centre'" → "islington-tennis-centre"
+    "'islington-tennis-centre'" -> "islington-tennis-centre"
     """
     if not isinstance(value, str):
         return value
@@ -128,74 +132,74 @@ def pick_best_slot_for_request(req: dict, slots: list):
 
 def probe_better_slots_for_request(req: dict) -> str:
     """
-    Llama a Better para ver cuántos slots hay para esta request.
-    Devuelve un string resumen que guardaremos en last_error.
-    NO reserva nada, solo mira y elige la mejor cancha según preferencias.
+    Solo mira si hay slots en Better para la franja de la request,
+    sin reservar nada. Devuelve un string resumen.
     """
-    # 1) Credenciales (de momento, fijas: Javier)
     username = os.environ.get("BETTER_USERNAME_JAVIER")
     password = os.environ.get("BETTER_PASSWORD_JAVIER")
 
     if not username or not password:
-        return "ERROR: faltan BETTER_USERNAME_JAVIER o BETTER_PASSWORD_JAVIER en las variables de entorno."
+        return "ERROR: faltan BETTER_USERNAME_JAVIER / BETTER_PASSWORD_JAVIER"
 
     client = LiveBetterClient(username=username, password=password)
 
-    # 2) Parámetros de la request
-    venue_slug = req["venue_slug"]
-    activity_slug = req["activity_slug"]
+    venue_slug_raw = req["venue_slug"]
+    activity_slug_raw = req["activity_slug"]
+
+    # 👇 Limpieza defensiva por si en DB llegan con comillas
+    venue_slug = clean_slug(venue_slug_raw)
+    activity_slug = clean_slug(activity_slug_raw)
+
+    print(f"[Scheduler] DEBUG venue_slug desde DB: {repr(venue_slug_raw)} -> limpio: {repr(venue_slug)}")
+    print(f"[Scheduler] DEBUG activity_slug desde DB: {repr(activity_slug_raw)} -> limpio: {repr(activity_slug)}")
+
     target_date = date.fromisoformat(req["target_date"])
 
-    # En la BD los tiempos están como '19:00:00'
-    start_raw = str(req["target_start_time"])    # '19:00:00'
-    end_raw = str(req["target_end_time"])        # '20:00:00'
+    start_raw = str(req["target_start_time"])   # '19:00:00'
+    end_raw = str(req["target_end_time"])       # '20:00:00'
+    start_pretty = start_raw[:5]                # '19:00'
+    end_pretty = end_raw[:5]                    # '20:00'
+    start_str = start_pretty.replace(":", "")   # '1900'
+    end_str = end_pretty.replace(":", "")       # '2000'
 
-    # Para logs bonitos:
-    start_pretty = start_raw[:5]                 # '19:00'
-    end_pretty = end_raw[:5]                     # '20:00'
-
-    # parse_time espera 'HHMM' (sin dos puntos)
-    start_str = start_pretty.replace(":", "")    # '1900'
-    end_str = end_pretty.replace(":", "")        # '2000'
-
-    start_time = parse_time(start_str)
-    end_time = parse_time(end_str)
+    try:
+        start_time = parse_time(start_str)
+        end_time = parse_time(end_str)
+    except Exception as e:
+        return f"ERROR: fallo parseando horas: {e!r}"
 
     try:
         slots = client.get_available_slots_for(
-            venue=BetterVenue(clean_slug(venue_slug)),
-            activity=BetterActivity(clean_slug(activity_slug)),
+            venue=BetterVenue(venue_slug),
+            activity=BetterActivity(activity_slug),
             activity_date=target_date,
             start_time=start_time,
             end_time=end_time,
         )
     except Exception as e:
-        # Devolvemos el error en texto para guardarlo en last_error
-        return f"ERROR: fallo al consultar Better: {e!r}"
+        return f"ERROR_BOOKING_SLOTS: fallo al consultar Better: {e!r}"
 
     count = len(slots)
-
     if not slots:
         return (
             f"BETTER_PROBE_OK: 0 slots para {req['target_date']} "
             f"{start_pretty}-{end_pretty}."
         )
 
-    # 👉 Nuevo: elegir el mejor slot según preferencias
+    # Si quieres, aquí podríamos llamar a pick_best_slot_for_request solo para ver:
     chosen_slot, chosen_label = pick_best_slot_for_request(req, slots)
 
     if chosen_slot is None:
-        # muy raro, pero por si acaso
         return (
             f"BETTER_PROBE_OK: {count} slots para {req['target_date']} "
             f"{start_pretty}-{end_pretty}, pero no se pudo elegir cancha."
         )
 
-    # Mensaje final: contamos slots y decimos cuál se seleccionaría
     return (
         f"BETTER_PROBE_OK: {count} slots para {req['target_date']} "
         f"{start_pretty}-{end_pretty}. SELECTED {chosen_label}."
     )
+
 
 def book_best_slot_for_request(req: dict) -> str:
     """
@@ -236,11 +240,10 @@ def book_best_slot_for_request(req: dict) -> str:
     except Exception as e:
         return f"ERROR_BOOKING_TIME_PARSE: {e!r}"
 
-    # 1) Obtener slots disponibles en esa franja
     try:
         slots = client.get_available_slots_for(
-            venue=BetterVenue(clean_slug(venue_slug)),
-            activity=BetterActivity(clean_slug(activity_slug)),
+            venue=BetterVenue(venue_slug),
+            activity=BetterActivity(activity_slug),
             activity_date=target_date,
             start_time=start_time,
             end_time=end_time,
