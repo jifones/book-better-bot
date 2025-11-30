@@ -8,7 +8,6 @@ from book_better.utils import parse_time
 from supabase_client import (
     get_pending_requests,
     update_request_seen,
-    mark_request_expired,
 )
 
 
