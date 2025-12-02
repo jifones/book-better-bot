@@ -127,7 +127,63 @@ def update_request_seen(
 
     return updated_rows[0]
 
+def update_request_booked(
+    request_id: str,
+    booked_court_name: str,
+    booked_slot_start: str,  # 'HH:MM:SS'
+    booked_slot_end: str,    # 'HH:MM:SS'
+    last_error: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Marca la request como BOOKED y guarda los campos booked_*."""
+    patch_url = f"{REST_URL}/court_booking_requests"
+    patch_params = {"id": f"eq.{request_id}"}
+    payload = {
+        "status": "BOOKED",
+        "is_active": False,
+        "booked_court_name": booked_court_name,
+        "booked_slot_start": booked_slot_start,
+        "booked_slot_end": booked_slot_end,
+        "last_run_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if last_error is not None:
+        payload["last_error"] = last_error
 
+    patch_headers = {**HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"}
+    resp = requests.patch(patch_url, headers=patch_headers, params=patch_params, json=payload, timeout=30)
+    if not resp.ok:
+        raise RuntimeError(f"Error al actualizar BOOKED {request_id}: {resp.status_code} {resp.text}")
+    rows = resp.json()
+    if not rows:
+        raise RuntimeError(f"PATCH BOOKED sin filas devueltas para id={request_id}")
+    return rows[0]
+
+def resolve_credentials_for_request(req: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Resuelve usuario/clave leyendo env keys desde booking_accounts (no desde la request).
+    Requiere que la fila apunte a better_account_id correcto.
+    """
+    ba = get_booking_account(req["better_account_id"])
+    user_key = ba.get("env_username_key")
+    pass_key = ba.get("env_password_key")
+    if not user_key or not pass_key:
+        raise RuntimeError(f"Faltan env keys en booking_accounts para {req['better_account_id']}")
+    username = os.environ.get(user_key)
+    password = os.environ.get(pass_key)
+    if not username or not password:
+        raise RuntimeError(f"Faltan secrets en GitHub Actions: {user_key} / {pass_key}")
+    return username, password
+
+def get_booking_account(better_account_id: str) -> Dict[str, Any]:
+    """Devuelve la fila de booking_accounts (por id)."""
+    url = f"{REST_URL}/booking_accounts"
+    params = {"id": f"eq.{better_account_id}", "limit": "1"}
+    resp = requests.get(url, headers=HEADERS, params=params, timeout=30)
+    if not resp.ok:
+        raise RuntimeError(f"booking_accounts GET error: {resp.status_code} {resp.text}")
+    rows = resp.json()
+    if not rows:
+        raise RuntimeError(f"booking_account no encontrado: {better_account_id}")
+    return rows[0]
 
 if __name__ == "__main__":
     # Test rápido desde la repo de better

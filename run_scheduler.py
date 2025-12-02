@@ -1,6 +1,10 @@
 import sys
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 import os
+import argparse
+import time
+import zoneinfo
+import requests
 
 from book_better.better.live_client import LiveBetterClient
 from book_better.enums import BetterActivity, BetterVenue
@@ -8,6 +12,8 @@ from book_better.utils import parse_time
 from supabase_client import (
     get_pending_requests,
     update_request_seen,
+    resolve_credentials_for_request,  
+    update_request_booked,           
 )
 
 
@@ -128,17 +134,32 @@ def pick_best_slot_for_request(req: dict, slots: list):
         name = getattr(fallback, "name", "unknown")
         return fallback, name
 
+# ADD: utilidades para hora local y espera
+def london_now(tz_name: str = "Europe/London"):
+    return datetime.now(zoneinfo.ZoneInfo(tz_name))
+
+def wait_until_local(target_hms: str = "22:00:01", tz_name: str = "Europe/London"):
+    """Bloquea hasta HH:MM:SS en la zona tz_name (p.ej. 22:00:01 Europe/London)."""
+    tz = zoneinfo.ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    hh, mm, ss = map(int, target_hms.split(":"))
+    target = now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
+    if target <= now:
+        # si ya pasó, no esperamos (útil en ejecuciones manuales tardías)
+        return
+    # Espera “mixta”: dormir largo y luego afinar los últimos 60s
+    delta = (target - now).total_seconds()
+    if delta > 60:
+        time.sleep(delta - 60)
+    while datetime.now(tz) < target:
+        time.sleep(0.2)
+
 
 def probe_better_slots_for_request(req: dict) -> str:
-    """
-    Solo mira si hay slots en Better para la franja de la request,
-    sin reservar nada. Devuelve un string resumen.
-    """
-    username = os.environ.get("BETTER_USERNAME_JAVIER")
-    password = os.environ.get("BETTER_PASSWORD_JAVIER")
-
-    if not username or not password:
-        return "ERROR: faltan BETTER_USERNAME_JAVIER / BETTER_PASSWORD_JAVIER"
+    try:
+        username, password = resolve_credentials_for_request(req)
+    except Exception as e:
+        return f"ERROR: {e!r}"
 
     client = LiveBetterClient(username=username, password=password)
 
@@ -201,20 +222,10 @@ def probe_better_slots_for_request(req: dict) -> str:
 
 
 def book_best_slot_for_request(req: dict) -> str:
-    """
-    Intenta reservar la mejor cancha según las preferencias de la request.
-    Usa LiveBetterClient.add_to_cart + checkout_with_benefit.
-    Devuelve un mensaje tipo:
-      - 'BOOKING_OK: reservado Court 5 ... order_id=123456'
-      - 'BOOKING_NO_SLOTS: 0 slots para ...'
-      - 'ERROR_BOOKING_...: ...'
-    """
-
-    username = os.environ.get("BETTER_USERNAME_JAVIER")
-    password = os.environ.get("BETTER_PASSWORD_JAVIER")
-
-    if not username or not password:
-        return "ERROR_BOOKING_CONFIG: faltan BETTER_USERNAME_JAVIER o BETTER_PASSWORD_JAVIER."
+    try:
+        username, password = resolve_credentials_for_request(req)
+    except Exception as e:
+        return f"ERROR_CREDENTIALS: {e!r}"
 
     client = LiveBetterClient(username=username, password=password)
 
@@ -288,8 +299,24 @@ def book_best_slot_for_request(req: dict) -> str:
         )
 
     # 5) Éxito
+    booked_court_name = chosen_label                     # p.ej. "Highbury Fields Tennis Court 11"
+    booked_start = f"{start_pretty}:00"                  # 'HH:MM:SS'
+    booked_end = f"{end_pretty}:00"                      # 'HH:MM:SS'
+
+    try:
+        update_request_booked(
+            req["id"],
+            booked_court_name=booked_court_name,
+            booked_slot_start=booked_start,
+            booked_slot_end=booked_end,
+            last_error=f"BOOKING_OK: order_id={order_id}",
+        )
+    except Exception as e:
+        # El booking fue OK, pero falló el patch; devolvemos el detalle.
+        return f"BOOKING_OK_BUT_PATCH_FAILED: order_id={order_id}; patch_error={e!r}"
+
     return (
-        f"BOOKING_OK: reservado {chosen_label} para {req['target_date']} "
+        f"BOOKING_OK: reservado {booked_court_name} para {req['target_date']} "
         f"{start_pretty}-{end_pretty}, order_id={order_id}."
     )
 
@@ -304,6 +331,29 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
 
+    # ADD: esperar a 22:00:01 London si hoy es el día T+7 de alguna request
+    # (por defecto activado; se puede parametrizar si quieres)
+    TARGET_HMS = os.environ.get("TARGET_TIME_LONDON", "22:00:01")
+    TZ_NAME = os.environ.get("TARGET_TZ_NAME", "Europe/London")
+
+    lon_today = london_now(TZ_NAME).date()
+
+    def is_t_plus_7(req) -> bool:
+        try:
+            tdate = date.fromisoformat(req["target_date"])
+        except Exception:
+            return False
+        return (tdate - lon_today) == timedelta(days=0)  # estamos el mismo día del target_date
+
+    # Si hay al menos una request cuyo target_date == hoy (día t+7 real),
+    # esperamos hasta 22:00:01 London ANTES de procesar.
+    if any(is_t_plus_7(r) for r in requests):
+        print(f"[Scheduler] Hoy coincide con target_date para alguna request; esperando a {TARGET_HMS} {TZ_NAME}…")
+        wait_until_local(TARGET_HMS, TZ_NAME)
+    else:
+        print("[Scheduler] No es día t+7 para ninguna request; no se aplica espera a 22:00:01.")
+    now = datetime.now(timezone.utc)
+
     for req in requests:
         rid = req["id"]
         action = should_process_request(req, now)
@@ -311,7 +361,11 @@ def main() -> int:
         if action == "EXPIRE":
             print(f"[Scheduler] Marcando como EXPIRED request {rid} (target_date ya pasó).")
             try:
-                updated = update_request_seen(rid, new_status="EXPIRED")
+                updated = update_request_seen(
+                    rid,
+                    new_status="EXPIRED",
+                    last_error="EXPIRED: target_date passed",
+                )
                 print(
                     f"[Scheduler] Request {rid} actualizada a EXPIRED "
                     f"(attempt_count={updated['attempt_count']}, "

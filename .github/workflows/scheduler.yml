@@ -2,10 +2,12 @@ name: Court booking scheduler
 
 on:
   schedule:
-    # Dispara todos los días a las 22:00 UTC.
-    # El script esperará internamente hasta las 22:00:02 Europe/London.
-    - cron: '30 21 * * *'
+    - cron: '30 21 * * *'   # 21:30 UTC diario (el script espera hasta 22:00:01 London)
   workflow_dispatch:
+    inputs:
+      target_time:
+        description: 'Override target time (HH:MM:SS Europe/London)'
+        required: false
 
 jobs:
   run-scheduler:
@@ -31,17 +33,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scheduler (wait until 22:00:01 London)
+      - name: Run scheduler (wait until target time London)
         env:
           # Supabase
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # Alias por si tu script usa estos nombres:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-          # Credenciales Better disponibles hoy (Javier)
+          # Better (usa las keys que haya en booking_accounts)
           BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
           BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
+
+          # Diario: solo procesa t+7 del día
+          RUN_MODE: "RELEASE_ONLY"
         run: |
-          python run_scheduler.py --target-time "22:00:01" --tz "Europe/London"
+          python run_scheduler.py --target-time "${{ github.event.inputs.target_time || '22:00:01' }}" --tz "Europe/London"
