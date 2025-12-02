@@ -4,7 +4,7 @@ on:
   schedule:
     # Dispara todos los días a las 22:00 UTC.
     # El script esperará internamente hasta las 22:00:02 Europe/London.
-    - cron: '58 21 * * *'
+    - cron: '*/2 * * * *'
   workflow_dispatch:
 
 jobs:
