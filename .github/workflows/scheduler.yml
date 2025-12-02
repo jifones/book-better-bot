@@ -4,13 +4,13 @@ on:
   schedule:
     # Dispara todos los días a las 22:00 UTC.
     # El script esperará internamente hasta las 22:00:02 Europe/London.
-    - cron: '00 22 * * *'
+    - cron: '30 21 * * *'
   workflow_dispatch:
 
 jobs:
   run-scheduler:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     concurrency:
       group: court-booking-scheduler
       cancel-in-progress: false
