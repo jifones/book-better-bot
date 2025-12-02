@@ -2,7 +2,7 @@ name: Court booking hourly (09:00–22:00 London)
 
 on:
   schedule:
-    - cron: '0 9-22 * * *'   # UTC; ajusta si prefieres, o añade TZ como en el otro
+    - cron: '0 9-21 * * *'   # UTC; ajusta si prefieres, o añade TZ como en el otro
   workflow_dispatch:
 
 jobs:
@@ -30,3 +30,4 @@ jobs:
         run: |
           # No esperamos a 22:00 en este flujo; solo ejecutamos.
           python run_scheduler.py
+
