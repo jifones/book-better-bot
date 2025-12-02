@@ -1,16 +1,21 @@
 name: Court booking scheduler
 
 on:
-  # Ejecutar todos los días a las 21:30 UTC
-  # (en invierno coincide con 21:30 Londres; en verano será 22:30 Londres)
   schedule:
-    - cron: '30 21 * * *'
-  # Permite lanzarlo a mano desde la pestaña "Actions"
+    # Dispara todos los días a las 22:00 UTC.
+    # El script esperará internamente hasta las 22:00:02 Europe/London.
+    - cron: '58 21 * * *'
   workflow_dispatch:
 
 jobs:
   run-scheduler:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: court-booking-scheduler
+      cancel-in-progress: false
+    env:
+      TZ: Europe/London
 
     steps:
       - name: Checkout repo
@@ -26,11 +31,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scheduler
+      - name: Run scheduler (wait until 22:00:01 London)
         env:
+          # Supabase
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # Estos los usaremos cuando enganchemos Better
+          # Alias por si tu script usa estos nombres:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          # Credenciales Better disponibles hoy (Javier)
           BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
           BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
-        run: python run_scheduler.py
+        run: |
+          python run_scheduler.py --target-time "22:00:01" --tz "Europe/London"
