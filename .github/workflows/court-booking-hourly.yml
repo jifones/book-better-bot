@@ -1,0 +1,32 @@
+name: Court booking hourly (09:00–22:00 London)
+
+on:
+  schedule:
+    - cron: '0 9-22 * * *'   # UTC; ajusta si prefieres, o añade TZ como en el otro
+  workflow_dispatch:
+
+jobs:
+  hourly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Europe/London
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run scheduler (hourly)
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
+          BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
+        run: |
+          # No esperamos a 22:00 en este flujo; solo ejecutamos.
+          python run_scheduler.py
