@@ -2,7 +2,11 @@ name: Court booking hourly (09:00–21:00 London)
 
 on:
   schedule:
+<<<<<<< HEAD
     - cron: '0 9-21 * * *'    # 09:00…21:00 UTC (evita 22:00)
+=======
+    - cron: '0 9-21 * * *'   # UTC; ajusta si prefieres, o añade TZ como en el otro
+>>>>>>> 58c9539 (deps: ensure requests present for scheduler)
   workflow_dispatch:
 
 jobs:
@@ -34,8 +38,11 @@ jobs:
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
           BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
+<<<<<<< HEAD
 
           # Hourly: no esperes a una hora objetivo
+=======
+>>>>>>> 58c9539 (deps: ensure requests present for scheduler)
           SKIP_WAIT: "1"
           RUN_MODE: "ANY"
         run: |

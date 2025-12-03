@@ -356,6 +356,15 @@ def main() -> int:
 
     for req in requests:
         rid = req["id"]
+        run_mode = os.environ.get("RUN_MODE", "ANY")
+        if run_mode == "RELEASE_ONLY":
+            tz = zoneinfo.ZoneInfo("Europe/London")
+            now_lon = now.astimezone(tz)
+            tgt = date.fromisoformat(req["target_date"])
+            release_date = tgt - timedelta(days=7)
+            if now_lon.date() != release_date:
+                print(f"[Scheduler] (RELEASE_ONLY) Skip {req['id']}: target_date={tgt} (t+7={release_date}), hoy={now_lon.date()}.")
+                continue
         action = should_process_request(req, now)
 
         if action == "EXPIRE":
