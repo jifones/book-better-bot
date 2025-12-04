@@ -56,6 +56,10 @@ def should_process_request(req: dict, now: datetime) -> str:
     hh, mm, ss = map(int, os.environ.get("RELEASE_TIME", "22:00:00").split(":"))
     release_dt = datetime(release_date.year, release_date.month, release_date.day, hh, mm, ss, tzinfo=tz)
 
+    # Si es HOURLY (ANY) y hoy es t+7, sólo procesar DESPUÉS de la hora de liberación
+    if os.environ.get("RUN_MODE") == "ANY" and today_lon == release_date and now_lon < release_dt:
+        return "WAIT_RELEASE"
+
     # 0) Si la fecha objetivo ya pasó → expira
     if today_lon > target_date:
         return "EXPIRE"
@@ -351,6 +355,16 @@ def book_best_slot_for_request(req: dict) -> str:
 def main() -> int:
     start_run = datetime.now(timezone.utc)
     print(f"[Scheduler] Ejecutando a las {start_run.isoformat()}")
+
+    # --- Guard de horario sólo para el HOURLY ---
+    if os.environ.get("RUN_MODE") == "ANY":
+        tz = zoneinfo.ZoneInfo("Europe/London")
+        now_lon = datetime.now(tz)
+        h = now_lon.hour
+        # Permitido: 07–23 Londres, EXCEPTUANDO 20 y 21
+        if not (7 <= h <= 23) or h in (20, 21):
+            print("[Scheduler] Hourly: fuera de ventana (permitido 07–23 London, excl. 20–21). Salgo.")
+            sys.exit(0)
 
     requests = get_pending_requests(limit=50)
     print(f"[Scheduler] Encontradas {len(requests)} requests PENDING/SEARCHING activas.")
