@@ -73,6 +73,9 @@ def should_process_request(req: dict, now: datetime) -> str:
     if now_lon < release_dt:
         return "WAIT_RELEASE" if today_lon == release_date else "SKIP"
 
+    if os.environ.get("RUN_MODE") == "ANY":
+        return "PROCESS"
+
     # 3) Ya pasó la liberación (válido para t+7 tras la hora de apertura y también t+6, t+5…)
     #    Comprobamos ventana horaria local (London)
     window_start = parse_time_str(req["search_window_start_time"])  # 'HH:MM:SS'
@@ -351,29 +354,16 @@ def main() -> int:
     requests = get_pending_requests(limit=50)
     print(f"[Scheduler] Encontradas {len(requests)} requests PENDING/SEARCHING activas.")
 
-    now = datetime.now(timezone.utc)
+    # --- ESPERA EXCLUSIVA PARA EL DIARIO ---
+    # Si corremos en modo diario (RELEASE_ONLY) y no nos han pedido saltar la espera,
+    # bloqueamos hasta la hora objetivo en Londres antes de procesar NADA.
+    if os.environ.get("RUN_MODE") == "RELEASE_ONLY" and os.environ.get("SKIP_WAIT", "0") != "1":
+        target_hms = os.environ.get("TARGET_TIME_LONDON", "22:00:01")
+        tz_name = os.environ.get("TARGET_TZ_NAME", "Europe/London")
+        print(f"[Scheduler] Diario: esperando hasta {target_hms} {tz_name} antes de procesar…")
+        wait_until_local(target_hms, tz_name)
 
-    # ADD: esperar a 22:00:01 London si hoy es el día T+7 de alguna request
-    # (por defecto activado; se puede parametrizar si quieres)
-    TARGET_HMS = os.environ.get("TARGET_TIME_LONDON", "22:00:01")
-    TZ_NAME = os.environ.get("TARGET_TZ_NAME", "Europe/London")
-
-    lon_today = london_now(TZ_NAME).date()
-
-    def is_t_plus_7(req) -> bool:
-        try:
-            tdate = date.fromisoformat(req["target_date"])
-        except Exception:
-            return False
-        return (tdate - lon_today) == timedelta(days=0)  # estamos el mismo día del target_date
-
-    # Si hay al menos una request cuyo target_date == hoy (día t+7 real),
-    # esperamos hasta 22:00:01 London ANTES de procesar.
-    if any(is_t_plus_7(r) for r in requests):
-        print(f"[Scheduler] Hoy coincide con target_date para alguna request; esperando a {TARGET_HMS} {TZ_NAME}…")
-        wait_until_local(TARGET_HMS, TZ_NAME)
-    else:
-        print("[Scheduler] No es día t+7 para ninguna request; no se aplica espera a 22:00:01.")
+    # Recalcula 'now' después de la espera (o sin esperar en hourly)
     now = datetime.now(timezone.utc)
 
     for req in requests:
