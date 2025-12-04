@@ -2,14 +2,14 @@ name: Court booking hourly (09:00–21:00 London)
 
 on:
   schedule:
-    - cron: '0 9-21 * * *'    # 09:00…21:00 UTC (evita 22:00)
+    - cron: '0 9-21 * * *'    # 09:00…21:00 UTC
   workflow_dispatch:
 
 jobs:
   hourly:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
+    env:                      # <-- SOLO UNO a nivel job
       TZ: Europe/London
 
     steps:
@@ -27,16 +27,17 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run scheduler (hourly, no wait)
-        env:
+        env:                  # <-- SOLO UNO a nivel step
+          # Hourly: ignora la espera y permite t+6, t+5...
+          SKIP_WAIT: "1"
+          RUN_MODE: "ANY"
+          # Supabase
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Better (las que tengas)
           BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
           BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
-
-          # Hourly: no esperes a una hora objetivo
-          SKIP_WAIT: "1"
-          RUN_MODE: "ANY"
         run: |
           python run_scheduler.py --tz "Europe/London"
