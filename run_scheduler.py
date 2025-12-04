@@ -59,6 +59,10 @@ def should_process_request(req: dict, now: datetime) -> str:
     if today_lon > target_date:
         return "EXPIRE"
 
+    # 0.5) Si estamos en t+1 (un día antes de jugar) → cerrar (no quiero seguir buscando)
+    if today_lon == (target_date - timedelta(days=1)):
+        return "CLOSE"
+
     # 1) Aún no alcanzamos la fecha mínima desde la que se permite buscar
     if today_lon < search_start_date:
         return "SKIP"
@@ -451,6 +455,20 @@ def main() -> int:
                 continue
         elif action == "WAIT_RELEASE":
             print("[Scheduler] Aún no es la hora de apertura; se espera al diario de las 22:00 London.")
+            continue
+
+        elif action == "CLOSE":
+            # Cerrar en t+1: no seguir buscando
+            try:
+                updated = update_request_seen(
+                    req["id"],
+                    new_status="CLOSED",
+                    last_error="AUTO_CLOSED_T+1: no se encontraron canchas dentro del período de liberación."
+                    is_active=False
+                )
+                print(f"[Scheduler] Request {req['id']} marcada CLOSED (t+1).")
+            except Exception as e:
+                print(f"[Scheduler] Error al cerrar {req['id']}: {e}", file=sys.stderr)
             continue
 
 
