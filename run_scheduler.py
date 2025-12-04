@@ -462,9 +462,9 @@ def main() -> int:
             try:
                 updated = update_request_seen(
                     req["id"],
-                    new_status="CLOSED",
-                    last_error="AUTO_CLOSED_T+1: no se encontraron canchas dentro del período de liberación."
-                    is_active=False
+                    new_status="CLOSED",  # <= COMA OBLIGATORIA
+                    last_error="AUTO_CLOSED_T+1: no se encontraron canchas dentro del período de liberación.",
+                    is_active=False,  # (opcional) descomenta si tu helper acepta este campo
                 )
                 print(f"[Scheduler] Request {req['id']} marcada CLOSED (t+1).")
             except Exception as e:
