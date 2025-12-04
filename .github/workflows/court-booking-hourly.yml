@@ -31,6 +31,8 @@ jobs:
           # Hourly: ignora la espera y permite t+6, t+5...
           SKIP_WAIT: "1"
           RUN_MODE: "ANY"
+
+          ENABLE_BETTER_BOOKING: "true"
           # Supabase
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

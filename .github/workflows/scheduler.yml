@@ -36,6 +36,8 @@ jobs:
           # Espera exacta
           TARGET_TIME_LONDON: "22:00:01"
           TARGET_TZ_NAME: "Europe/London"
+
+          ENABLE_BETTER_BOOKING: "true"
           # Supabase
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
