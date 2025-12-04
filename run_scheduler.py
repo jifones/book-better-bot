@@ -32,37 +32,55 @@ def clean_slug(value):
 
 def should_process_request(req: dict, now: datetime) -> str:
     """
-    Decide qué hacer con una request según la fecha/hora actual.
+    Decide qué hacer con una request según la fecha/hora actual (hora Londres).
 
-    Devuelve:
-      - "SKIP"     → todavía no toca procesarla
-      - "EXPIRE"   → ya pasó la fecha objetivo, hay que marcarla EXPIRED
-      - "PROCESS"  → toca procesarla ahora (dentro de la ventana horaria)
+    Devuelve uno de:
+      - "WAIT_RELEASE" → hoy es el día de liberación (t+7) pero antes de la hora de apertura (p.ej. 22:00 London)
+      - "SKIP"         → todavía no toca (antes del día de liberación, o fuera de ventana)
+      - "EXPIRE"       → ya pasó la fecha objetivo; marcar como expirada
+      - "PROCESS"      → toca procesarla ahora (ventana y condiciones cumplidas)
     """
-    today = now.date()
-    now_time = now.time()
+    # Hora Londres robusta (invierno/verano)
+    tz = zoneinfo.ZoneInfo("Europe/London")
+    now_lon = now.astimezone(tz)
+    today_lon = now_lon.date()
+    now_time_lon = now_lon.time()
 
-    target_date = date.fromisoformat(req["target_date"])
-    search_start_date = date.fromisoformat(req["search_start_date"])
+    # Fechas relevantes
+    target_date = date.fromisoformat(req["target_date"])                # día de juego
+    search_start_date = date.fromisoformat(req["search_start_date"])    # desde cuándo podemos buscar
+    release_date = target_date - timedelta(days=7)                      # día de liberación (t+7)
 
-    # Si aún no ha llegado la fecha desde la que podemos buscar → no hacemos nada
-    if today < search_start_date:
-        return "SKIP"
+    # Hora de apertura (por defecto 22:00:00 London; configurable por env RELEASE_TIME="HH:MM:SS")
+    hh, mm, ss = map(int, os.environ.get("RELEASE_TIME", "22:00:00").split(":"))
+    release_dt = datetime(release_date.year, release_date.month, release_date.day, hh, mm, ss, tzinfo=tz)
 
-    # Si ya se pasó la fecha objetivo → marcamos como expirada
-    if today > target_date:
+    # 0) Si la fecha objetivo ya pasó → expira
+    if today_lon > target_date:
         return "EXPIRE"
 
-    # Si es el día objetivo (o posterior a search_start_date) y estamos dentro
-    # de la ventana horaria, la procesamos.
-    window_start = parse_time_str(req["search_window_start_time"])
-    window_end = parse_time_str(req["search_window_end_time"])
+    # 1) Aún no alcanzamos la fecha mínima desde la que se permite buscar
+    if today_lon < search_start_date:
+        return "SKIP"
 
-    if window_start <= now_time <= window_end:
+    # 2) Antes del día/hora de liberación:
+    #    - Si hoy ES el día de liberación pero antes de la hora → WAIT_RELEASE (el diario esperará)
+    #    - Si hoy es anterior al día de liberación → SKIP
+    if now_lon < release_dt:
+        return "WAIT_RELEASE" if today_lon == release_date else "SKIP"
+
+    # 3) Ya pasó la liberación (válido para t+7 tras la hora de apertura y también t+6, t+5…)
+    #    Comprobamos ventana horaria local (London)
+    window_start = parse_time_str(req["search_window_start_time"])  # 'HH:MM:SS'
+    window_end   = parse_time_str(req["search_window_end_time"])
+
+    if window_start <= now_time_lon <= window_end:
         return "PROCESS"
 
-    # Está en rango de fechas, pero fuera de la ventana horaria
+    # 4) Está en rango de fechas, pero fuera de ventana horaria
     return "SKIP"
+
+
 
 def extract_court_number_from_string(text: str) -> str | None:
     """
@@ -431,6 +449,9 @@ def main() -> int:
             except Exception as e:
                 print(f"[Scheduler] Error al actualizar {rid}: {e}", file=sys.stderr)
                 continue
+        elif action == "WAIT_RELEASE":
+            print("[Scheduler] Aún no es la hora de apertura; se espera al diario de las 22:00 London.")
+            continue
 
 
 
