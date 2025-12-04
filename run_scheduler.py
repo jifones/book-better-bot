@@ -5,6 +5,7 @@ import argparse
 import time
 import zoneinfo
 import requests
+from requests import HTTPError
 
 from book_better.better.live_client import LiveBetterClient
 from book_better.enums import BetterActivity, BetterVenue
@@ -410,6 +411,12 @@ def main() -> int:
                 # 🔥 MODO BOOKING REAL
                 message = book_best_slot_for_request(req)
                 print(f"[Scheduler] Resultado BOOKING para {rid}: {message}")
+
+                # 👉 NUEVO: reintento 1× sólo si fue un checkout 422
+                if message.startswith("ERROR_BOOKING_CHECKOUT"):
+                    print("[Scheduler] checkout 422: retrying booking once immediately…")
+                    message = book_best_slot_for_request(req)
+                    print(f"[Scheduler] Resultado BOOKING (retry) para {rid}: {message}")
 
                 # Status válidos en la tabla: PENDING, SEARCHING, BOOKED, EXPIRED, FAILED
                 if message.startswith("BOOKING_OK"):
