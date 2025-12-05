@@ -361,8 +361,8 @@ def book_with_credit_for_request(req: dict) -> str:
     # target_date 'YYYY-MM-DD' -> date
     tgt_date = date.fromisoformat(req["target_date"])
     # Horas vienen 'HH:MM:SS' en DB; el helper espera 'HH:MM'
-    start = parse_time(req["target_start_time"][:5])
-    end   = parse_time(req["target_end_time"][:5])
+    start = parse_time(req["target_start_time"].replace(":", "")[:4])  # "HH:MM:SS" -> "HHMM"
+    end   = parse_time(req["target_end_time"].replace(":", "")[:4])    # "HH:MM:SS" -> "HHMM"
 
     # Elegimos la cuenta Better por nombre (lo usabas así en el script antiguo)
     # Si la fila usa las credenciales de Javier, pasamos 'javier'; en cualquier otro caso, 'default'
