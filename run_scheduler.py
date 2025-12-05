@@ -10,6 +10,7 @@ from requests import HTTPError
 from book_better.better.live_client import LiveBetterClient
 from book_better.enums import BetterActivity, BetterVenue
 from book_better.utils import parse_time
+from book_better.main import book_with_credit_for_date
 from supabase_client import (
     get_pending_requests,
     update_request_seen,
@@ -37,60 +38,60 @@ def should_process_request(req: dict, now: datetime) -> str:
 
     Devuelve uno de:
       - "WAIT_RELEASE" → hoy es el día de liberación (t+7) pero antes de la hora de apertura (p.ej. 22:00 London)
-      - "SKIP"         → todavía no toca (antes del día de liberación, o fuera de ventana)
+      - "CLOSE"        → estamos en t+1 (un día antes del target_date): cerrar y no seguir buscando
+      - "SKIP"         → todavía no toca (antes del día de liberación, o fuera de ventana en modo diario)
       - "EXPIRE"       → ya pasó la fecha objetivo; marcar como expirada
-      - "PROCESS"      → toca procesarla ahora (ventana y condiciones cumplidas)
+      - "PROCESS"      → toca procesarla ahora
     """
-    # Hora Londres robusta (invierno/verano)
     tz = zoneinfo.ZoneInfo("Europe/London")
     now_lon = now.astimezone(tz)
     today_lon = now_lon.date()
     now_time_lon = now_lon.time()
 
-    # Fechas relevantes
-    target_date = date.fromisoformat(req["target_date"])                # día de juego
-    search_start_date = date.fromisoformat(req["search_start_date"])    # desde cuándo podemos buscar
-    release_date = target_date - timedelta(days=7)                      # día de liberación (t+7)
+    target_date = date.fromisoformat(req["target_date"])
+    search_start_date = date.fromisoformat(req["search_start_date"])
+    release_date = target_date - timedelta(days=7)
 
-    # Hora de apertura (por defecto 22:00:00 London; configurable por env RELEASE_TIME="HH:MM:SS")
+    # Hora de apertura (por defecto 22:00:00 London; configurable)
     hh, mm, ss = map(int, os.environ.get("RELEASE_TIME", "22:00:00").split(":"))
     release_dt = datetime(release_date.year, release_date.month, release_date.day, hh, mm, ss, tzinfo=tz)
 
-    # Si es HOURLY (ANY) y hoy es t+7, sólo procesar DESPUÉS de la hora de liberación
-    if os.environ.get("RUN_MODE") == "ANY" and today_lon == release_date and now_lon < release_dt:
-        return "WAIT_RELEASE"
-
-    # 0) Si la fecha objetivo ya pasó → expira
+    # 0) Si ya pasó la fecha objetivo → EXPIRE
     if today_lon > target_date:
         return "EXPIRE"
 
-    # 0.5) Si estamos en t+1 (un día antes de jugar) → cerrar (no quiero seguir buscando)
+    # 0.5) Si estamos en t+1 (un día antes de jugar) → CLOSE (no seguir buscando)
     if today_lon == (target_date - timedelta(days=1)):
         return "CLOSE"
 
-    # 1) Aún no alcanzamos la fecha mínima desde la que se permite buscar
+    # 1) Aún no alcanza la fecha mínima desde la que se permite buscar → SKIP
     if today_lon < search_start_date:
         return "SKIP"
 
-    # 2) Antes del día/hora de liberación:
-    #    - Si hoy ES el día de liberación pero antes de la hora → WAIT_RELEASE (el diario esperará)
-    #    - Si hoy es anterior al día de liberación → SKIP
-    if now_lon < release_dt:
-        return "WAIT_RELEASE" if today_lon == release_date else "SKIP"
-
-    if os.environ.get("RUN_MODE") == "ANY":
+    # 2) Día de liberación (t+7)
+    if today_lon == release_date:
+        if now_lon < release_dt:
+            # Antes de la hora de apertura
+            return "WAIT_RELEASE"
+        # Después de la hora de apertura: PROCESS (tanto diario como hourly)
         return "PROCESS"
 
-    # 3) Ya pasó la liberación (válido para t+7 tras la hora de apertura y también t+6, t+5…)
-    #    Comprobamos ventana horaria local (London)
+    # 3) No es t+7 (t+6, t+5, ...): comportamiento depende del modo
+    run_mode = os.environ.get("RUN_MODE", "ANY")
+    if run_mode == "ANY":
+        # Hourly → ignora ventana, permite cazar cancelaciones todo el día
+        return "PROCESS"
+
+    # 4) Modo diario (RELEASE_ONLY) fuera de t+7 → SKIP
+    # (El filtro extra de t+7 ya lo haces en main() antes de llamar a esta función)
+    # Pero si llega aquí por algún motivo, aplicamos ventana como salvaguarda:
     window_start = parse_time_str(req["search_window_start_time"])  # 'HH:MM:SS'
     window_end   = parse_time_str(req["search_window_end_time"])
-
     if window_start <= now_time_lon <= window_end:
         return "PROCESS"
 
-    # 4) Está en rango de fechas, pero fuera de ventana horaria
     return "SKIP"
+
 
 
 
@@ -350,6 +351,45 @@ def book_best_slot_for_request(req: dict) -> str:
         f"{start_pretty}-{end_pretty}, order_id={order_id}."
     )
 
+from book_better.utils import parse_time  # si no lo tienes ya importado
+
+def book_with_credit_for_request(req: dict) -> str:
+    """
+    Adaptador: toma la fila de court_booking_requests y usa el flujo de crédito previo.
+    Devuelve un string en el mismo formato que esperaba tu lógica ('BOOKING_OK', 'BOOKING_NO_SLOTS', 'ERROR_BOOKING_*').
+    """
+    # target_date 'YYYY-MM-DD' -> date
+    tgt_date = date.fromisoformat(req["target_date"])
+    # Horas vienen 'HH:MM:SS' en DB; el helper espera 'HH:MM'
+    start = parse_time(req["target_start_time"][:5])
+    end   = parse_time(req["target_end_time"][:5])
+
+    # Elegimos la cuenta Better por nombre (lo usabas así en el script antiguo)
+    # Si la fila usa las credenciales de Javier, pasamos 'javier'; en cualquier otro caso, 'default'
+    from supabase_client import resolve_credentials_for_request
+    u_key, _ = resolve_credentials_for_request(req)
+    better_account = "javier" if u_key == "BETTER_USERNAME_JAVIER" else "default"
+
+    # Llamamos al flujo que ya aplica crédito y cierra
+    result = book_with_credit_for_date(
+        target_date=tgt_date,
+        start_time=start,
+        end_time=end,
+        better_account=better_account,
+    )
+
+    # La función puede devolver dict o un id/objeto; normalizamos al contrato que usa tu scheduler
+    if isinstance(result, dict):
+        st = result.get("status")
+        if st == "not_open_yet":
+            return f"BOOKING_NO_SLOTS: not_open_yet for {req['target_date']} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+        if st == "no_slot":
+            return f"BOOKING_NO_SLOTS: 0 slots for {req['target_date']} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+    if result:
+        # éxito (id de orden u objeto ok)
+        return "BOOKING_OK: credit checkout completed"
+    # si llegó aquí, algo falló en el flujo de crédito
+    return "ERROR_BOOKING_CHECKOUT: credit flow returned empty/None"
 
 
 def main() -> int:
@@ -422,17 +462,17 @@ def main() -> int:
             enable_booking = os.environ.get("ENABLE_BETTER_BOOKING", "").lower() == "true"
 
             if enable_booking:
-                # 🔥 MODO BOOKING REAL
-                message = book_best_slot_for_request(req)
+                # 🔥 COMPRA REAL USANDO CRÉDITO (flujo antiguo)
+                message = book_with_credit_for_request(req)
                 print(f"[Scheduler] Resultado BOOKING para {rid}: {message}")
 
-                # 👉 NUEVO: reintento 1× sólo si fue un checkout 422
+                # Reintento 1× con el MISMO flujo de crédito
                 if message.startswith("ERROR_BOOKING_CHECKOUT"):
-                    print("[Scheduler] checkout 422: retrying booking once immediately…")
-                    message = book_best_slot_for_request(req)
+                    print("[Scheduler] checkout/credit error: retrying once…")
+                    message = book_with_credit_for_request(req)
                     print(f"[Scheduler] Resultado BOOKING (retry) para {rid}: {message}")
 
-                # Status válidos en la tabla: PENDING, SEARCHING, BOOKED, EXPIRED, FAILED
+                # Mapeo de estado (sin cambios)
                 if message.startswith("BOOKING_OK"):
                     new_status = "BOOKED"
                 elif message.startswith("BOOKING_NO_SLOTS"):
@@ -440,8 +480,8 @@ def main() -> int:
                 elif message.startswith("ERROR_BOOKING_"):
                     new_status = "FAILED"
                 else:
-                    # fallback defensivo
                     new_status = "FAILED"
+
             else:
                 # 🔍 SOLO RADAR (lo que acabas de ver en el log)
                 message = probe_better_slots_for_request(req)
