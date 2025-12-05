@@ -374,7 +374,8 @@ def book_with_credit_for_request(req: dict) -> str:
     # Setea alias SOLO para esta ejecución del proceso
     os.environ["BETTER_USERNAME"] = u_val
     os.environ["BETTER_PASSWORD"] = p_val
-    better_account = "default"
+    label = u_key.split("BETTER_USERNAME_", 1)[1].lower() if u_key.upper().startswith("BETTER_USERNAME_") else "javier"
+    better_account = label
 
     # 5) Ejecuta el flujo legacy de crédito
     try:
