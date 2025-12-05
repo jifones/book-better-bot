@@ -31,6 +31,37 @@ def clean_slug(value):
         return value
     return value.strip().strip("'\"")
 
+def _same_str(a: str, b: str) -> bool:
+    return (a or "").strip() == (b or "").strip()
+
+def find_consecutive_sibling(curr_req: dict, all_reqs: list[dict]) -> dict | None:
+    """
+    Busca en 'all_reqs' una request hermana: misma cuenta/fecha/venue/activity,
+    activa y en estado pendiente, cuyo inicio == fin de la request actual (bloque contiguo).
+    """
+    curr_start = (curr_req["target_start_time"] or "")[:5]  # "HH:MM"
+    curr_end   = (curr_req["target_end_time"] or "")[:5]
+
+    for r in all_reqs:
+        if r["id"] == curr_req["id"]:
+            continue
+        if not (r.get("is_active") and r.get("status") in ("PENDING","SEARCHING","CREATED","QUEUED")):
+            continue
+        if not (
+            _same_str(r.get("better_account_id"), curr_req.get("better_account_id"))
+            and _same_str(r.get("target_date"), curr_req.get("target_date"))
+            and _same_str(r.get("venue_slug"), curr_req.get("venue_slug"))
+            and _same_str(r.get("activity_slug"), curr_req.get("activity_slug"))
+        ):
+            continue
+
+        sib_start = (r["target_start_time"] or "")[:5]
+        # Hermana si el siguiente bloque empieza justo cuando termina el actual
+        if sib_start == curr_end:
+            return r
+    return None
+
+
 def should_process_request(req: dict, now: datetime) -> str:
     """
     Decide qué hacer con una request según la fecha/hora actual (hora Londres).
@@ -550,6 +581,48 @@ def main() -> int:
             except Exception as e:
                 print(f"[Scheduler] Error al actualizar {rid}: {e}", file=sys.stderr)
                 continue
+
+            # Encadenar bloque contiguo (solo si el primero quedó BOOKED)
+            if new_status == "BOOKED":
+                sib = find_consecutive_sibling(req, requests)
+                if sib:
+                    print(f"[Scheduler] Intentando bloque contiguo para {sib['id']} ({sib['target_start_time'][:5]}-{sib['target_end_time'][:5]})…")
+                    msg2 = book_with_credit_for_request(sib)
+
+                    if msg2.startswith("BOOKING_OK"):
+                        try:
+                            update_request_seen(
+                                sib["id"],
+                                new_status="BOOKED",
+                                last_error=msg2,
+                            )
+                            print(f"[Scheduler] Segundo bloque BOOKED (request {sib['id']}).")
+                        except Exception as e:
+                            print(f"[Scheduler] Error al actualizar segundo bloque {sib['id']}: {e}", file=sys.stderr)
+
+                    elif msg2.startswith("BOOKING_NO_SLOTS"):
+                        try:
+                            update_request_seen(
+                                sib["id"],
+                                new_status="SEARCHING",
+                                last_error=msg2,
+                            )
+                            print(f"[Scheduler] Segundo bloque sin cupos (request {sib['id']}).")
+                        except Exception as e:
+                            print(f"[Scheduler] Error al marcar SEARCHING el segundo bloque {sib['id']}: {e}", file=sys.stderr)
+
+                    else:
+                        try:
+                            update_request_seen(
+                                sib["id"],
+                                new_status="FAILED",
+                                last_error=msg2,
+                            )
+                            print(f"[Scheduler] Segundo bloque FAILED (request {sib['id']}): {msg2}")
+                        except Exception as e:
+                            print(f"[Scheduler] Error al marcar FAILED el segundo bloque {sib['id']}: {e}", file=sys.stderr)
+
+
         elif action == "WAIT_RELEASE":
             if os.environ.get("RUN_MODE") == "RELEASE_ONLY":
                 print("[Scheduler] Aún no es la hora de apertura; se espera al diario de las 22:00 London.")
