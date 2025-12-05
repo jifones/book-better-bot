@@ -515,7 +515,9 @@ def main() -> int:
                 print(f"[Scheduler] Error al actualizar {rid}: {e}", file=sys.stderr)
                 continue
         elif action == "WAIT_RELEASE":
-            print("[Scheduler] Aún no es la hora de apertura; se espera al diario de las 22:00 London.")
+            if os.environ.get("RUN_MODE") == "RELEASE_ONLY":
+                print("[Scheduler] Aún no es la hora de apertura; se espera al diario de las 22:00 London.")
+            # En hourly (RUN_MODE=ANY) no decimos nada; simplemente lo saltamos
             continue
 
         elif action == "CLOSE":
