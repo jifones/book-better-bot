@@ -1,9 +1,10 @@
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-
+import time
 import requests
 from dotenv import load_dotenv
+from supabase import Client, create_client
 
 # Cargar .env
 load_dotenv()
@@ -12,6 +13,15 @@ load_dotenv()
 # VITE_SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY
 SUPABASE_URL = os.environ.get("VITE_SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_SERVICE_ROLE = os.environ.get("SUPABASE_SERVICE_ROLE") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+    raise RuntimeError("Faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE (o VITE_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) en envs.")
+
+client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
+
+# alias usado por get_pending_requests:
+supabase = client
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     raise RuntimeError(
@@ -27,28 +37,48 @@ HEADERS = {
 }
 
 
-def get_pending_requests(limit: int = 10) -> List[Dict[str, Any]]:
+def get_pending_requests(limit: int = 50, max_retries: int = 3):
     """
-    Lee las court_booking_requests con status PENDING/SEARCHING y is_active = true.
-    Devuelve una lista de diccionarios con las filas.
+    Lee las requests activas que el scheduler puede procesar.
+    Retry defensivo ante 5xx/Cloudflare para evitar caídas espurias.
     """
-    params = {
-        "status": "in.(PENDING,SEARCHING)",
-        "is_active": "eq.true",
-        "order": "created_at.asc",
-        "limit": str(limit),
-    }
+    select_cols = (
+        "id,better_account_id,profile_id,"
+        "venue_slug,activity_slug,"
+        "target_date,target_start_time,target_end_time,"
+        "search_start_date,search_window_start_time,search_window_end_time,"
+        "preferred_court_name_1,preferred_court_name_2,preferred_court_name_3,"
+        "status,is_active,attempt_count,last_run_at,last_error"
+    )
 
-    url = f"{REST_URL}/court_booking_requests"
-    response = requests.get(url, headers=HEADERS, params=params, timeout=30)
+    for attempt in range(1, max_retries + 1):
+        try:
+            q = supabase.from_("court_booking_requests").select(select_cols)
+            q = q.eq("is_active", True)
+            q = q.in_("status", ["PENDING", "SEARCHING", "CREATED", "QUEUED"])
+            q = q.gte("target_date", date.today().isoformat())
+            q = q.lte("search_start_date", date.today().isoformat())
+            q = q.order("target_date", desc=False)  # ascendente
+            q = q.limit(limit)
 
-    if not response.ok:
-        raise RuntimeError(
-            f"Error al leer court_booking_requests: "
-            f"{response.status_code} {response.text}"
-        )
+            res = q.execute()
+            data = getattr(res, "data", None)
+            if data is None:
+                raise RuntimeError(f"Supabase devolvió respuesta vacía (intento {attempt}): {res}")
+            return data
 
-    return response.json()
+        except Exception as e:
+            msg = str(e)
+            transient = (
+                "Internal Server Error" in msg
+                or "502" in msg or "503" in msg or "504" in msg
+            )
+            if attempt < max_retries and transient:
+                backoff = 0.8 * attempt
+                print(f"[Supabase] 5xx/transient (intento {attempt}), reintentando en {backoff:.1f}s…")
+                time.sleep(backoff)
+                continue
+            raise RuntimeError(f"Error al leer court_booking_requests: {msg}") from e
 
 
 def update_request_seen(
