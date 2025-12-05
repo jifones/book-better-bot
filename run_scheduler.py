@@ -377,6 +377,30 @@ def book_with_credit_for_request(req: dict) -> str:
     label = u_key.split("BETTER_USERNAME_", 1)[1].lower() if u_key.upper().startswith("BETTER_USERNAME_") else "javier"
     better_account = label
 
+    # --- NUEVO: inyecta slugs que main.py espera ---
+    venue_slug = (req.get("venue_slug") or "").strip()
+    activity_slug = (req.get("activity_slug") or "").strip()
+    if not venue_slug or not activity_slug:
+        return "ERROR_BOOKING_CHECKOUT_MISSING_SLUGS: venue_slug/activity_slug vacíos en la request"
+
+    os.environ["BETTER_VENUE_SLUG"] = venue_slug
+    os.environ["BETTER_ACTIVITY_SLUG"] = activity_slug
+
+    # (opcional, sólo si tu main.py los usa para priorizar canchas)
+    pref1 = (req.get("preferred_court_name_1") or "").strip()
+    pref2 = (req.get("preferred_court_name_2") or "").strip()
+    pref3 = (req.get("preferred_court_name_3") or "").strip()
+    if pref1:
+        os.environ["BETTER_PREF_COURT_1"] = pref1
+    if pref2:
+        os.environ["BETTER_PREF_COURT_2"] = pref2
+    if pref3:
+        os.environ["BETTER_PREF_COURT_3"] = pref3
+
+    os.environ["BETTER_TARGET_DATE"] = tgt_date.isoformat()            # "YYYY-MM-DD"
+    os.environ["BETTER_START_HHMM"]  = start.strftime("%H%M")          # "HHMM"
+    os.environ["BETTER_END_HHMM"]    = end.strftime("%H%M")            # "HHMM"
+
     # 5) Ejecuta el flujo legacy de crédito
     try:
         result = book_with_credit_for_date(
@@ -385,6 +409,9 @@ def book_with_credit_for_request(req: dict) -> str:
             end_time=end,
             better_account=better_account,
         )
+    except KeyError as e:
+        # Si main.py pide otra env, lo verás por nombre exacto
+        return f"ERROR_BOOKING_CHECKOUT_MISSING_ENVVAR: {e.args[0]} required by main.py"
     except Exception as e:
         return f"ERROR_BOOKING_CHECKOUT: {e}"
 
