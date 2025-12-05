@@ -416,12 +416,21 @@ def book_with_credit_for_request(req: dict) -> str:
         return f"ERROR_BOOKING_CHECKOUT: {e}"
 
     # 6) Normaliza el mensaje esperado por tu scheduler
+    release_date = tgt_date - timedelta(days=7)
+
     if isinstance(result, dict):
         st = result.get("status")
+
+        # Si ya pasó el día de liberación (t+7) pero el flujo dice "not_open_yet",
+        # lo tratamos como "no_slot" para evitar el mensaje confuso.
+        if st == "not_open_yet" and date.today() > release_date:
+            return f"BOOKING_NO_SLOTS: 0 slots for {req['target_date']} {req['target_start_time'][:5]}-{req['target_end_time'][:5]}"
         if st == "not_open_yet":
             return f"BOOKING_NO_SLOTS: not_open_yet for {req['target_date']} {req['target_start_time'][:5]}-{req['target_end_time'][:5]}"
         if st == "no_slot":
             return f"BOOKING_NO_SLOTS: 0 slots for {req['target_date']} {req['target_start_time'][:5]}-{req['target_end_time'][:5]}"
+        if st == "ok":
+            return "BOOKING_OK: credit checkout completed"
 
     if result:
         return "BOOKING_OK: credit checkout completed"
