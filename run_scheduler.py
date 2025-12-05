@@ -361,24 +361,19 @@ def book_with_credit_for_request(req: dict) -> str:
     start = parse_time(req["target_start_time"].replace(":", "")[:4])  # "HH:MM:SS" -> "HHMM"
     end   = parse_time(req["target_end_time"].replace(":", "")[:4])    # "HH:MM:SS" -> "HHMM"
 
-    # 2) Resuelve las env-keys (no el valor), p.ej. "BETTER_USERNAME_JAVIER"
-    try:
-        u_key, p_key = resolve_credentials_for_request(req)
-    except Exception as e:
-        return f"ERROR_BOOKING_CHECKOUT_RESOLVE_KEYS: {e}"
+    # 2) Resuelve las env-keys (no el valor)
+    u_key, p_key = resolve_credentials_for_request(req)
 
-    # 3) Inyecta alias genéricos que main.py espera (garantiza que no falle por 'default')
-    u_val = os.environ.get(u_key, "")
-    p_val = os.environ.get(p_key, "")
+    # 3) Obtén el valor real; si no existe esa clave, cae a los alias genéricos
+    u_val = os.environ.get(u_key) or os.environ.get("BETTER_USERNAME")
+    p_val = os.environ.get(p_key) or os.environ.get("BETTER_PASSWORD")
+
     if not u_val or not p_val:
-        return f"ERROR_BOOKING_CHECKOUT_MISSING_ENV: {u_key}/{p_key} no están presentes en env."
+        return f"ERROR_BOOKING_CHECKOUT_MISSING_ENV: {u_key}/{p_key} + BETTER_USERNAME/BETTER_PASSWORD no están presentes en env."
 
     # Setea alias SOLO para esta ejecución del proceso
     os.environ["BETTER_USERNAME"] = u_val
     os.environ["BETTER_PASSWORD"] = p_val
-
-    # 4) Deriva un label (opcional). Si no te importa, puede ser 'javier' o 'default'; da igual,
-    #    porque ya forzamos los alias genéricos a las credenciales correctas.
     better_account = "default"
 
     # 5) Ejecuta el flujo legacy de crédito

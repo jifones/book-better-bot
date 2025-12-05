@@ -46,5 +46,8 @@ jobs:
           # Better (las que tengas disponibles)
           BETTER_USERNAME_JAVIER: ${{ secrets.BETTER_USERNAME_JAVIER }}
           BETTER_PASSWORD_JAVIER: ${{ secrets.BETTER_PASSWORD_JAVIER }}
+          # Alias genéricos (fallback del flujo de crédito)
+          BETTER_USERNAME: ${{ secrets.BETTER_USERNAME_JAVIER }}
+          BETTER_PASSWORD: ${{ secrets.BETTER_PASSWORD_JAVIER }}
         run: |
           python run_scheduler.py --target-time "22:00:01" --tz "Europe/London"
