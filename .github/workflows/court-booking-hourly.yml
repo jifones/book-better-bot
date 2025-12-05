@@ -32,7 +32,7 @@ jobs:
           SKIP_WAIT: "1"
           RUN_MODE: "ANY"
 
-          ENABLE_BETTER_BOOKING: "true"
+          ENABLE_BETTER_BOOKING: "false"
           # Supabase
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
