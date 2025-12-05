@@ -116,14 +116,31 @@ def book_with_credit_for_date(
     - Si todavía no hay slots (la fecha no está abierta), devuelve status 'not_open_yet'.
     """
 
-    # Elegimos usuario/clave según la cuenta Better
-    if better_account == "javier":
-        username = os.environ["BETTER_USERNAME_JAVIER"]
-        password = os.environ["BETTER_PASSWORD_JAVIER"]
-    else:
-        # Por ahora, fallback a las variables genéricas si algún día añadimos más cuentas
-        username = os.environ["BETTER_USERNAME"]
-        password = os.environ["BETTER_PASSWORD"]
+    label = (better_account or "default").strip().upper()
+
+    username = None
+    password = None
+    u_env = p_env = None
+
+    if label and label != "DEFAULT":
+        u_env = f"BETTER_USERNAME_{label}"
+        p_env = f"BETTER_PASSWORD_{label}"
+        username = os.environ.get(u_env)
+        password = os.environ.get(p_env)
+
+    # Fallback a los alias genéricos (útiles para Javier hoy)
+    if not username or not password:
+        u_env = "BETTER_USERNAME"
+        p_env = "BETTER_PASSWORD"
+        username = os.environ.get(u_env)
+        password = os.environ.get(p_env)
+
+    if not username or not password:
+        raise KeyError(
+            f"Missing env for Better account '{better_account}'. "
+            f"Tried {u_env}/{p_env} and BETTER_USERNAME/BETTER_PASSWORD."
+        )
+
 
     client = LiveBetterClient(username=username, password=password)
 

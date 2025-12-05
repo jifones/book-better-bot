@@ -368,8 +368,10 @@ def book_with_credit_for_request(req: dict) -> str:
     # Si la fila usa las credenciales de Javier, pasamos 'javier'; en cualquier otro caso, 'default'
     from supabase_client import resolve_credentials_for_request
     u_key, _ = resolve_credentials_for_request(req)
-    better_account = "javier" if u_key == "BETTER_USERNAME_JAVIER" else "default"
-
+    better_account = (
+        u_key.split("BETTER_USERNAME_", 1)[1].lower()
+        if u_key.upper().startswith("BETTER_USERNAME_") else "default"
+    )
     # Llamamos al flujo que ya aplica crédito y cierra
     result = book_with_credit_for_date(
         target_date=tgt_date,
