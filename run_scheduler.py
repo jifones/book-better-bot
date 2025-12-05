@@ -18,7 +18,6 @@ from supabase_client import (
     update_request_booked,           
 )
 
-
 def parse_time_str(t: str) -> time:
     # Esperamos formato 'HH:MM:SS'
     return datetime.strptime(t, "%H:%M:%S").time()
@@ -351,46 +350,59 @@ def book_best_slot_for_request(req: dict) -> str:
         f"{start_pretty}-{end_pretty}, order_id={order_id}."
     )
 
-from book_better.utils import parse_time  # si no lo tienes ya importado
 
 def book_with_credit_for_request(req: dict) -> str:
     """
-    Adaptador: toma la fila de court_booking_requests y usa el flujo de crédito previo.
-    Devuelve un string en el mismo formato que esperaba tu lógica ('BOOKING_OK', 'BOOKING_NO_SLOTS', 'ERROR_BOOKING_*').
+    Usa el flujo legacy de crédito, inyectando alias BETTER_USERNAME/BETTER_PASSWORD
+    a partir de las env-keys que ya resuelve la fila (u_key/p_key).
     """
-    # target_date 'YYYY-MM-DD' -> date
+    # 1) Normaliza fecha/hora
     tgt_date = date.fromisoformat(req["target_date"])
-    # Horas vienen 'HH:MM:SS' en DB; el helper espera 'HH:MM'
     start = parse_time(req["target_start_time"].replace(":", "")[:4])  # "HH:MM:SS" -> "HHMM"
     end   = parse_time(req["target_end_time"].replace(":", "")[:4])    # "HH:MM:SS" -> "HHMM"
 
-    # Elegimos la cuenta Better por nombre (lo usabas así en el script antiguo)
-    # Si la fila usa las credenciales de Javier, pasamos 'javier'; en cualquier otro caso, 'default'
-    from supabase_client import resolve_credentials_for_request
-    u_key, _ = resolve_credentials_for_request(req)
-    better_account = (
-        u_key.split("BETTER_USERNAME_", 1)[1].lower()
-        if u_key.upper().startswith("BETTER_USERNAME_") else "default"
-    )
-    # Llamamos al flujo que ya aplica crédito y cierra
-    result = book_with_credit_for_date(
-        target_date=tgt_date,
-        start_time=start,
-        end_time=end,
-        better_account=better_account,
-    )
+    # 2) Resuelve las env-keys (no el valor), p.ej. "BETTER_USERNAME_JAVIER"
+    try:
+        u_key, p_key = resolve_credentials_for_request(req)
+    except Exception as e:
+        return f"ERROR_BOOKING_CHECKOUT_RESOLVE_KEYS: {e}"
 
-    # La función puede devolver dict o un id/objeto; normalizamos al contrato que usa tu scheduler
+    # 3) Inyecta alias genéricos que main.py espera (garantiza que no falle por 'default')
+    u_val = os.environ.get(u_key, "")
+    p_val = os.environ.get(p_key, "")
+    if not u_val or not p_val:
+        return f"ERROR_BOOKING_CHECKOUT_MISSING_ENV: {u_key}/{p_key} no están presentes en env."
+
+    # Setea alias SOLO para esta ejecución del proceso
+    os.environ["BETTER_USERNAME"] = u_val
+    os.environ["BETTER_PASSWORD"] = p_val
+
+    # 4) Deriva un label (opcional). Si no te importa, puede ser 'javier' o 'default'; da igual,
+    #    porque ya forzamos los alias genéricos a las credenciales correctas.
+    better_account = "default"
+
+    # 5) Ejecuta el flujo legacy de crédito
+    try:
+        result = book_with_credit_for_date(
+            target_date=tgt_date,
+            start_time=start,
+            end_time=end,
+            better_account=better_account,
+        )
+    except Exception as e:
+        return f"ERROR_BOOKING_CHECKOUT: {e}"
+
+    # 6) Normaliza el mensaje esperado por tu scheduler
     if isinstance(result, dict):
         st = result.get("status")
         if st == "not_open_yet":
-            return f"BOOKING_NO_SLOTS: not_open_yet for {req['target_date']} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+            return f"BOOKING_NO_SLOTS: not_open_yet for {req['target_date']} {req['target_start_time'][:5]}-{req['target_end_time'][:5]}"
         if st == "no_slot":
-            return f"BOOKING_NO_SLOTS: 0 slots for {req['target_date']} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+            return f"BOOKING_NO_SLOTS: 0 slots for {req['target_date']} {req['target_start_time'][:5]}-{req['target_end_time'][:5]}"
+
     if result:
-        # éxito (id de orden u objeto ok)
         return "BOOKING_OK: credit checkout completed"
-    # si llegó aquí, algo falló en el flujo de crédito
+
     return "ERROR_BOOKING_CHECKOUT: credit flow returned empty/None"
 
 
