@@ -601,6 +601,7 @@ def main() -> int:
                                 last_error=msg2,
                             )
                             print(f"[Scheduler] Segundo bloque BOOKED (request {sib['id']}).")
+                            processed_ids.add(sib["id"])
                         except Exception as e:
                             print(f"[Scheduler] Error al actualizar segundo bloque {sib['id']}: {e}", file=sys.stderr)
 
@@ -612,6 +613,7 @@ def main() -> int:
                                 last_error=msg2,
                             )
                             print(f"[Scheduler] Segundo bloque sin cupos (request {sib['id']}).")
+                            processed_ids.add(sib["id"])
                         except Exception as e:
                             print(f"[Scheduler] Error al marcar SEARCHING el segundo bloque {sib['id']}: {e}", file=sys.stderr)
 
@@ -623,6 +625,7 @@ def main() -> int:
                                 last_error=msg2,
                             )
                             print(f"[Scheduler] Segundo bloque FAILED (request {sib['id']}): {msg2}")
+                            processed_ids.add(sib["id"])
                         except Exception as e:
                             print(f"[Scheduler] Error al marcar FAILED el segundo bloque {sib['id']}: {e}", file=sys.stderr)
 
