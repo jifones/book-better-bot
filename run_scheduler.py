@@ -497,9 +497,13 @@ def main() -> int:
 
     # Recalcula 'now' después de la espera (o sin esperar en hourly)
     now = datetime.now(timezone.utc)
+    processed_ids: set[str] = set()
 
     for req in requests:
         rid = req["id"]
+        if rid in processed_ids:
+            print(f"[Scheduler] Skip {rid}: ya procesada en este run.")
+            continue
         run_mode = os.environ.get("RUN_MODE", "ANY")
         if run_mode == "RELEASE_ONLY":
             tz = zoneinfo.ZoneInfo("Europe/London")
