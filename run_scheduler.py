@@ -543,17 +543,18 @@ def main() -> int:
             enable_booking = os.environ.get("ENABLE_BETTER_BOOKING", "").lower() == "true"
 
             if enable_booking:
-                # 🔥 COMPRA REAL USANDO CRÉDITO (flujo antiguo)
-                message = book_with_credit_for_request(req)
+                # 🔥 COMPRA REAL usando el flujo nuevo con LiveBetterClient
+                #     → esto además actualiza booked_court_name / booked_slot_start / booked_slot_end
+                message = book_best_slot_for_request(req)
                 print(f"[Scheduler] Resultado BOOKING para {rid}: {message}")
 
-                # Reintento 1× con el MISMO flujo de crédito
+                # Reintento 1× con el MISMO flujo si el checkout falló
                 if message.startswith("ERROR_BOOKING_CHECKOUT"):
-                    print("[Scheduler] checkout/credit error: retrying once…")
-                    message = book_with_credit_for_request(req)
+                    print("[Scheduler] checkout error: retrying once…")
+                    message = book_best_slot_for_request(req)
                     print(f"[Scheduler] Resultado BOOKING (retry) para {rid}: {message}")
 
-                # Mapeo de estado (sin cambios)
+                # Mapeo de estado (igual que antes)
                 if message.startswith("BOOKING_OK"):
                     new_status = "BOOKED"
                 elif message.startswith("BOOKING_NO_SLOTS"):
@@ -562,6 +563,7 @@ def main() -> int:
                     new_status = "FAILED"
                 else:
                     new_status = "FAILED"
+
 
             else:
                 # 🔍 SOLO RADAR (lo que acabas de ver en el log)
@@ -591,7 +593,7 @@ def main() -> int:
                 sib = find_consecutive_sibling(req, requests)
                 if sib:
                     print(f"[Scheduler] Intentando bloque contiguo para {sib['id']} ({sib['target_start_time'][:5]}-{sib['target_end_time'][:5]})…")
-                    msg2 = book_with_credit_for_request(sib)
+                    msg2 = book_best_slot_for_request(sib)
 
                     if msg2.startswith("BOOKING_OK"):
                         try:
