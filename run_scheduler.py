@@ -11,6 +11,7 @@ from book_better.better.live_client import LiveBetterClient
 from book_better.enums import BetterActivity, BetterVenue
 from book_better.utils import parse_time
 from book_better.main import book_with_credit_for_date
+from book_better.models import ActivityCart
 from supabase_client import (
     get_pending_requests,
     update_request_seen,
@@ -341,15 +342,43 @@ def book_best_slot_for_request(req: dict) -> str:
             f"{start_pretty}-{end_pretty}, pero no se pudo elegir cancha."
         )
 
-    # 3) add_to_cart
+    # 3) add_to_cart (idempotente: si ya está en carrito, NO lo agregamos de nuevo)
     try:
-        cart = client.add_to_cart(chosen_slot)
+        if client.cart_contains_slot_id(chosen_slot.id):
+            # Ya existe en carrito: construimos un ActivityCart “mínimo” desde el resumen
+            summary = client.get_cart_summary()
+            cart = ActivityCart(id=summary.id, amount=summary.total, source=summary.source)
+        else:
+            cart = client.add_to_cart(chosen_slot)
+    except HTTPError as e:
+        # Si Better dice “already full”, no es FAILED: es SEARCHING (lo tratamos como NO_SLOTS)
+        try:
+            msg = (e.response.json() or {}).get("message", "") if e.response is not None else ""
+        except Exception:
+            msg = ""
+        if "already full" in (msg or "").lower():
+            return (
+                f"BOOKING_NO_SLOTS: session_full para {req['target_date']} "
+                f"{start_pretty}-{end_pretty}."
+            )
+        return f"ERROR_BOOKING_ADD_TO_CART: {e!r}"
     except Exception as e:
         return f"ERROR_BOOKING_ADD_TO_CART: {e!r}"
 
     # 4) checkout usando beneficio / crédito
     try:
         order_id = client.checkout_with_benefit(cart)
+    except HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        # Caso típico: 422 en /checkout/complete pero el slot quedó en el carrito.
+        if status == 422:
+            # Si el slot sigue en carrito, lo dejamos como CREATED/IN_CART (no FAILED, no NO_SLOTS)
+            if client.cart_contains_slot_id(chosen_slot.id):
+                return (
+                    f"BOOKING_IN_CART: checkout_422 para {req['target_date']} "
+                    f"{start_pretty}-{end_pretty} ({chosen_label})."
+                )
+        return f"ERROR_BOOKING_CHECKOUT: {e!r}"
     except Exception as e:
         return f"ERROR_BOOKING_CHECKOUT: {e!r}"
 
@@ -557,6 +586,8 @@ def main() -> int:
                 # Mapeo de estado (igual que antes)
                 if message.startswith("BOOKING_OK"):
                     new_status = "BOOKED"
+                elif message.startswith("BOOKING_IN_CART"):
+                    new_status = "CREATED"
                 elif message.startswith("BOOKING_NO_SLOTS"):
                     new_status = "SEARCHING"
                 elif message.startswith("ERROR_BOOKING_"):

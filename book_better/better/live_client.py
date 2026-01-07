@@ -196,6 +196,32 @@ class LiveBetterClient:
             general_credit_max_applicable=credits_general.get("max_applicable", 0),
         )
 
+    @_requires_authentication
+    def get_cart_raw(self) -> dict:
+        """
+        Devuelve el JSON completo del carrito (GET /api/activities/cart).
+        """
+        resp = self.session.get("activities/cart")
+        resp.raise_for_status()
+        return resp.json().get("data", {}) or {}
+
+    @_requires_authentication
+    def cart_contains_slot_id(self, slot_id: int) -> bool:
+        """
+        True si el carrito ya contiene un item cuyo 'id' coincida con el slot.id
+        (evita agregar el mismo slot 2 veces).
+        """
+        data = self.get_cart_raw()
+        items = data.get("items") or data.get("cart_items") or data.get("lines") or []
+        for it in items:
+            try:
+                # En Better, normalmente el item lleva el id del slot (o algo equivalente).
+                if int(it.get("id")) == int(slot_id):
+                    return True
+            except Exception:
+                continue
+        return False
+
 
     def apply_credit(self, amount: int, cart_source: str) -> None:
         payload = {
