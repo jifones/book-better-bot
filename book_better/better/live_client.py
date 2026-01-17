@@ -208,19 +208,45 @@ class LiveBetterClient:
     @_requires_authentication
     def cart_contains_slot_id(self, slot_id: int) -> bool:
         """
-        True si el carrito ya contiene un item cuyo 'id' coincida con el slot.id
-        (evita agregar el mismo slot 2 veces).
+        True si el carrito ya contiene el slot_id.
+        Better a veces guarda el id del slot directo en it["id"], y otras veces anidado.
         """
         data = self.get_cart_raw()
+
         items = data.get("items") or data.get("cart_items") or data.get("lines") or []
+
+        def extract_possible_ids(it: dict) -> list[int]:
+            ids: list[int] = []
+            # patrón 1: id directo
+            if isinstance(it, dict) and "id" in it:
+                try:
+                    ids.append(int(it.get("id")))
+                except Exception:
+                    pass
+            # patrón 2: anidado en item
+            sub = it.get("item") if isinstance(it, dict) else None
+            if isinstance(sub, dict) and "id" in sub:
+                try:
+                    ids.append(int(sub.get("id")))
+                except Exception:
+                    pass
+            # patrón 3: anidado en items[0]
+            subs = it.get("items") if isinstance(it, dict) else None
+            if isinstance(subs, list):
+                for x in subs:
+                    if isinstance(x, dict) and "id" in x:
+                        try:
+                            ids.append(int(x.get("id")))
+                        except Exception:
+                            continue
+            return ids
+
         for it in items:
-            try:
-                # En Better, normalmente el item lleva el id del slot (o algo equivalente).
-                if int(it.get("id")) == int(slot_id):
+            for cand in extract_possible_ids(it if isinstance(it, dict) else {}):
+                if cand == int(slot_id):
                     return True
-            except Exception:
-                continue
         return False
+
 
 
     def apply_credit(self, amount: int, cart_source: str) -> None:

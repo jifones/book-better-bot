@@ -578,8 +578,8 @@ def main() -> int:
                 print(f"[Scheduler] Resultado BOOKING para {rid}: {message}")
 
                 # Reintento 1× con el MISMO flujo si el checkout falló
-                if message.startswith("ERROR_BOOKING_CHECKOUT"):
-                    print("[Scheduler] checkout error: retrying once…")
+                if message.startswith("ERROR_BOOKING_CHECKOUT") and "422" not in message:
+                    print("[Scheduler] checkout error (non-422): retrying once…")
                     message = book_best_slot_for_request(req)
                     print(f"[Scheduler] Resultado BOOKING (retry) para {rid}: {message}")
 
@@ -590,6 +590,10 @@ def main() -> int:
                     new_status = "CREATED"
                 elif message.startswith("BOOKING_NO_SLOTS"):
                     new_status = "SEARCHING"
+                elif message.startswith("ERROR_BOOKING_SLOTS") and any(code in message for code in (" 500", " 502", " 503", " 504")):
+                    new_status = "SEARCHING"  # Better caído / inestable: seguir intentando
+                elif message.startswith("ERROR_BOOKING_CHECKOUT") and "422" in message:
+                    new_status = "CREATED"    # checkout 422: no es grave, se reintenta luego
                 elif message.startswith("ERROR_BOOKING_"):
                     new_status = "FAILED"
                 else:
