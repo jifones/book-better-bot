@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import time
 import requests
@@ -56,7 +56,7 @@ def get_pending_requests(limit: int = 50, max_retries: int = 3):
             q = supabase.from_("court_booking_requests").select(select_cols)
             q = q.eq("is_active", True)
             q = q.in_("status", ["PENDING", "SEARCHING", "CREATED", "QUEUED"])
-            q = q.gte("target_date", date.today().isoformat())
+            q = q.gte("target_date", (date.today() - timedelta(days=14)).isoformat())
             q = q.lte("search_start_date", date.today().isoformat())
             q = q.order("target_date", desc=False)  # ascendente
             q = q.limit(limit)
@@ -85,6 +85,7 @@ def update_request_seen(
     request_id: str,
     new_status: str | None = None,
     last_error: str | None = None,
+    is_active: bool | None = None,
 ) -> Dict[str, Any]:
     """
     Actualiza una request marcando que el bot la ha revisado:
@@ -127,6 +128,9 @@ def update_request_seen(
     if last_error is not None:
         # guardamos el mensaje del radar / error
         payload["last_error"] = last_error
+
+    if is_active is not None:
+        payload["is_active"] = is_active
 
     patch_url = f"{REST_URL}/court_booking_requests"
     patch_params = {"id": f"eq.{request_id}"}
