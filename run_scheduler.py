@@ -334,53 +334,118 @@ def book_best_slot_for_request(req: dict) -> str:
             f"{start_pretty}-{end_pretty}."
         )
 
-    # 2) Elegir la mejor cancha según preferencias
-    chosen_slot, chosen_label = pick_best_slot_for_request(req, slots)
-    if chosen_slot is None:
-        return (
-            f"ERROR_BOOKING_SELECTION: {count} slots para {req['target_date']} "
-            f"{start_pretty}-{end_pretty}, pero no se pudo elegir cancha."
-        )
+    # 2) Ordenar candidatos: preferidas primero, luego el resto
+    prefs_raw = [
+        req.get("preferred_court_name_1"),
+        req.get("preferred_court_name_2"),
+        req.get("preferred_court_name_3"),
+    ]
+    preferred_numbers: list[str] = []
+    for pref in prefs_raw:
+        num = extract_court_number_from_string(pref) if pref else None
+        if num:
+            preferred_numbers.append(num)
 
-    # 3) add_to_cart (idempotente: si ya está en carrito, NO lo agregamos de nuevo)
-    try:
-        if client.cart_contains_slot_id(chosen_slot.id):
-            # Ya existe en carrito: construimos un ActivityCart “mínimo” desde el resumen
-            summary = client.get_cart_summary()
-            cart = ActivityCart(id=summary.id, amount=summary.total, source=summary.source)
+    # agrupamos slots por número de cancha (si se puede extraer)
+    slots_by_court: dict[str, list] = {}
+    unknown_slots: list = []
+    for s in slots:
+        num = get_slot_court_number(s)
+        if num:
+            slots_by_court.setdefault(num, []).append(s)
         else:
-            cart = client.add_to_cart(chosen_slot)
-    except HTTPError as e:
-        # Si Better dice “already full”, no es FAILED: es SEARCHING (lo tratamos como NO_SLOTS)
-        try:
-            msg = (e.response.json() or {}).get("message", "") if e.response is not None else ""
-        except Exception:
-            msg = ""
-        if "already full" in (msg or "").lower():
-            return (
-                f"BOOKING_NO_SLOTS: session_full para {req['target_date']} "
-                f"{start_pretty}-{end_pretty}."
-            )
-        return f"ERROR_BOOKING_ADD_TO_CART: {e!r}"
-    except Exception as e:
-        return f"ERROR_BOOKING_ADD_TO_CART: {e!r}"
+            unknown_slots.append(s)
 
-    # 4) checkout usando beneficio / crédito
-    try:
-        order_id = client.checkout_with_benefit(cart)
-    except HTTPError as e:
-        status = getattr(e.response, "status_code", None)
-        # Caso típico: 422 en /checkout/complete pero el slot quedó en el carrito.
-        if status == 422:
-            # Si el slot sigue en carrito, lo dejamos como CREATED/IN_CART (no FAILED, no NO_SLOTS)
+    candidates: list = []
+    used_ids: set[int] = set()
+
+    # primero: slots de canchas preferidas en orden
+    for pref_num in preferred_numbers:
+        for s in slots_by_court.get(pref_num, []):
+            if s.id not in used_ids:
+                candidates.append(s)
+                used_ids.add(s.id)
+
+    # luego: cualquier otro slot restante
+    for num, group in slots_by_court.items():
+        for s in group:
+            if s.id not in used_ids:
+                candidates.append(s)
+                used_ids.add(s.id)
+
+    # finalmente: los que no tienen número claro
+    for s in unknown_slots:
+        if s.id not in used_ids:
+            candidates.append(s)
+            used_ids.add(s.id)
+
+    # 3) Intentar reservar: si un slot queda "already full", probamos el siguiente
+    max_attempts = min(8, len(candidates))
+    last_full_msg = None
+
+    for i in range(max_attempts):
+        chosen_slot = candidates[i]
+        chosen_num = get_slot_court_number(chosen_slot)
+        chosen_label = f"Court {chosen_num}" if chosen_num else getattr(chosen_slot, "name", "unknown")
+
+        try:
+            # idempotencia: si ya está en el carrito, no lo agregamos de nuevo
             if client.cart_contains_slot_id(chosen_slot.id):
+                summary = client.get_cart_summary()
+                cart = ActivityCart(id=summary.id, amount=summary.total, source=summary.source)
+            else:
+                cart = client.add_to_cart(chosen_slot)
+
+        except HTTPError as e:
+            # mensaje de Better
+            try:
+                msg = (e.response.json() or {}).get("message", "") if e.response is not None else ""
+            except Exception:
+                msg = ""
+
+            if "already full" in (msg or "").lower():
+                last_full_msg = msg
+                continue  # PROBAR SIGUIENTE SLOT
+
+            return (
+                f"ERROR_BOOKING_ADD_TO_CART: {msg or repr(e)} "
+                f"para {req['target_date']} {start_pretty}-{end_pretty} ({chosen_label})."
+            )
+        
+        # 4) checkout
+        try:
+            order_id = client.checkout_with_benefit(cart)
+        except HTTPError as e:
+            s = str(e)
+            # si es 422, normalmente el item quedó en carrito o Better rechazó el complete en ese instante
+            if "422" in s:
                 return (
                     f"BOOKING_IN_CART: checkout_422 para {req['target_date']} "
                     f"{start_pretty}-{end_pretty} ({chosen_label})."
                 )
-        return f"ERROR_BOOKING_CHECKOUT: {e!r}"
-    except Exception as e:
-        return f"ERROR_BOOKING_CHECKOUT: {e!r}"
+            return f"ERROR_BOOKING_CHECKOUT: {e!r}"
+
+        # si llegó aquí, quedó pagado/confirmado
+        try:
+            update_request_booked(
+                request_id=req["id"],
+                booked_court_name=chosen_label,
+                booked_slot_start=start_raw,
+                booked_slot_end=end_raw,
+                last_error=f"BOOKING_OK: {chosen_label} order_id={order_id}",
+            )
+        except Exception as e:
+            # OJO: el booking ya ocurrió; sólo falló escribir en DB
+            return f"BOOKING_OK_BUT_DB_UPDATE_FAILED: {chosen_label} order_id={order_id} err={e!r}"
+
+        return f"BOOKING_OK: {chosen_label} order_id={order_id}"
+
+    # si todos los candidatos dieron "already full"
+    return (
+        f"BOOKING_NO_SLOTS: session_full para {req['target_date']} "
+        f"{start_pretty}-{end_pretty}. last='{last_full_msg}'"
+    )
+
 
     if not order_id:
         return (
@@ -587,13 +652,13 @@ def main() -> int:
                 if message.startswith("BOOKING_OK"):
                     new_status = "BOOKED"
                 elif message.startswith("BOOKING_IN_CART"):
-                    new_status = "CREATED"
+                    new_status = "SEARCHING"   # seguimos intentando (y evitamos romper constraint)
                 elif message.startswith("BOOKING_NO_SLOTS"):
                     new_status = "SEARCHING"
                 elif message.startswith("ERROR_BOOKING_SLOTS") and any(code in message for code in (" 500", " 502", " 503", " 504")):
                     new_status = "SEARCHING"  # Better caído / inestable: seguir intentando
                 elif message.startswith("ERROR_BOOKING_CHECKOUT") and "422" in message:
-                    new_status = "CREATED"    # checkout 422: no es grave, se reintenta luego
+                    new_status = "SEARCHING"   # idem
                 elif message.startswith("ERROR_BOOKING_"):
                     new_status = "FAILED"
                 else:
