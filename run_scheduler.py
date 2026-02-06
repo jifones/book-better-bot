@@ -46,7 +46,7 @@ def find_consecutive_sibling(curr_req: dict, all_reqs: list[dict]) -> dict | Non
     for r in all_reqs:
         if r["id"] == curr_req["id"]:
             continue
-        if not (r.get("is_active") and r.get("status") in ("PENDING","SEARCHING","CREATED","QUEUED")):
+        if not (r.get("is_active") and r.get("status") in ("PENDING","SEARCHING","QUEUED")):
             continue
         if not (
             _same_str(r.get("better_account_id"), curr_req.get("better_account_id"))
@@ -412,68 +412,81 @@ def book_best_slot_for_request(req: dict) -> str:
                 f"para {req['target_date']} {start_pretty}-{end_pretty} ({chosen_label})."
             )
         
-        # 4) checkout
+        # 4) checkout pagando con CRÉDITOS (igual que el navegador: /credits/apply + /checkout/complete)
         try:
-            order_id = client.checkout_with_benefit(cart)
-        except HTTPError as e:
-            s = str(e)
-            # si es 422, normalmente el item quedó en carrito o Better rechazó el complete en ese instante
-            if "422" in s:
+            # Leemos el total e item_hash actual del carrito
+            summary = client.get_cart_summary()
+            amount = int(summary.total or 0)
+
+            if amount <= 0:
                 return (
-                    f"BOOKING_IN_CART: checkout_422 para {req['target_date']} "
-                    f"{start_pretty}-{end_pretty} ({chosen_label})."
+                    f"ERROR_BOOKING_CHECKOUT: carrito con total=0 "
+                    f"para {req['target_date']} {start_pretty}-{end_pretty} ({chosen_label})."
                 )
+
+            # Validación: si no hay crédito suficiente, no tiene sentido seguir con checkout
+            if summary.general_credit_available < amount or summary.general_credit_max_applicable < amount:
+                return (
+                    f"BOOKING_NO_CREDIT: crédito insuficiente para {req['target_date']} "
+                    f"{start_pretty}-{end_pretty} ({chosen_label}). "
+                    f"need={amount}, avail={summary.general_credit_available}, max={summary.general_credit_max_applicable}"
+                )
+
+            # Paso 1: reservar crédito por el monto del carrito
+            client.apply_credit(amount=amount, cart_source=summary.source)
+
+            # Paso 2: refrescar el carrito (item_hash puede cambiar después de apply)
+            summary2 = client.get_cart_summary()
+
+            # Paso 3: completar checkout usando tender_type=credit
+            complete = client.checkout_with_credit(
+                cart_id=summary2.id,
+                item_hash=summary2.item_hash,
+                amount=amount,
+                source=summary2.source,
+            )
+
+            order_id = complete.get("complete_order_id") if isinstance(complete, dict) else None
+
+        except HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if status == 422:
+                if client.cart_contains_slot_id(chosen_slot.id):
+                    return (
+                        f"BOOKING_IN_CART: checkout_422 para {req['target_date']} "
+                        f"{start_pretty}-{end_pretty} ({chosen_label})."
+                    )
+            return f"ERROR_BOOKING_CHECKOUT: {e!r}"
+        
+        except Exception as e:
             return f"ERROR_BOOKING_CHECKOUT: {e!r}"
 
-        # si llegó aquí, quedó pagado/confirmado
+        if not order_id:
+            return (
+                "ERROR_BOOKING_CHECKOUT: checkout sin complete_order_id "
+                f"para {req['target_date']} {start_pretty}-{end_pretty} ({chosen_label})."
+            )
+
+        # ✅ ÉXITO REAL: en cuanto tenemos order_id, parchamos la request y salimos
+        booked_court_name = chosen_label
+        booked_start = f"{start_pretty}:00"
+        booked_end = f"{end_pretty}:00"
+
         try:
             update_request_booked(
-                request_id=req["id"],
-                booked_court_name=chosen_label,
-                booked_slot_start=start_raw,
-                booked_slot_end=end_raw,
-                last_error=f"BOOKING_OK: {chosen_label} order_id={order_id}",
+                req["id"],
+                booked_court_name=booked_court_name,
+                booked_slot_start=booked_start,
+                booked_slot_end=booked_end,
+                last_error=f"BOOKING_OK: order_id={order_id}",
             )
         except Exception as e:
-            # OJO: el booking ya ocurrió; sólo falló escribir en DB
-            return f"BOOKING_OK_BUT_DB_UPDATE_FAILED: {chosen_label} order_id={order_id} err={e!r}"
+            return f"BOOKING_OK_BUT_PATCH_FAILED: order_id={order_id}; patch_error={e!r}"
 
-        return f"BOOKING_OK: {chosen_label} order_id={order_id}"
-
-    # si todos los candidatos dieron "already full"
-    return (
-        f"BOOKING_NO_SLOTS: session_full para {req['target_date']} "
-        f"{start_pretty}-{end_pretty}. last='{last_full_msg}'"
-    )
-
-
-    if not order_id:
         return (
-            "ERROR_BOOKING_CHECKOUT: checkout sin order_id "
-            f"para {req['target_date']} {start_pretty}-{end_pretty} ({chosen_label})."
+            f"BOOKING_OK: reservado {booked_court_name} para {req['target_date']} "
+            f"{start_pretty}-{end_pretty}, order_id={order_id}."
         )
-
-    # 5) Éxito
-    booked_court_name = chosen_label                     # p.ej. "Highbury Fields Tennis Court 11"
-    booked_start = f"{start_pretty}:00"                  # 'HH:MM:SS'
-    booked_end = f"{end_pretty}:00"                      # 'HH:MM:SS'
-
-    try:
-        update_request_booked(
-            req["id"],
-            booked_court_name=booked_court_name,
-            booked_slot_start=booked_start,
-            booked_slot_end=booked_end,
-            last_error=f"BOOKING_OK: order_id={order_id}",
-        )
-    except Exception as e:
-        # El booking fue OK, pero falló el patch; devolvemos el detalle.
-        return f"BOOKING_OK_BUT_PATCH_FAILED: order_id={order_id}; patch_error={e!r}"
-
-    return (
-        f"BOOKING_OK: reservado {booked_court_name} para {req['target_date']} "
-        f"{start_pretty}-{end_pretty}, order_id={order_id}."
-    )
 
 
 def book_with_credit_for_request(req: dict) -> str:
@@ -655,6 +668,8 @@ def main() -> int:
                     new_status = "SEARCHING"   # seguimos intentando (y evitamos romper constraint)
                 elif message.startswith("BOOKING_NO_SLOTS"):
                     new_status = "SEARCHING"
+                elif message.startswith("BOOKING_NO_CREDIT"):
+                    new_status = "SEARCHING"
                 elif message.startswith("ERROR_BOOKING_SLOTS") and any(code in message for code in (" 500", " 502", " 503", " 504")):
                     new_status = "SEARCHING"  # Better caído / inestable: seguir intentando
                 elif message.startswith("ERROR_BOOKING_CHECKOUT") and "422" in message:
@@ -720,16 +735,33 @@ def main() -> int:
                             print(f"[Scheduler] Error al marcar SEARCHING el segundo bloque {sib['id']}: {e}", file=sys.stderr)
 
                     else:
+                        # Mapeo “seguro” para el segundo bloque (igual que el primero)
+                        if msg2.startswith("BOOKING_IN_CART"):
+                            st2 = "SEARCHING"
+                        elif msg2.startswith("BOOKING_NO_CREDIT"):
+                            st2 = "SEARCHING"   # como tú quieres
+                        elif msg2.startswith("BOOKING_NO_SLOTS"):
+                            st2 = "SEARCHING"
+                        elif msg2.startswith("ERROR_BOOKING_SLOTS") and any(code in msg2 for code in (" 500", " 502", " 503", " 504")):
+                            st2 = "SEARCHING"
+                        elif msg2.startswith("ERROR_BOOKING_CHECKOUT") and "422" in msg2:
+                            st2 = "SEARCHING"
+                        elif msg2.startswith("ERROR_BOOKING_"):
+                            st2 = "FAILED"
+                        else:
+                            st2 = "FAILED"
+
                         try:
                             update_request_seen(
                                 sib["id"],
-                                new_status="FAILED",
+                                new_status=st2,
                                 last_error=msg2,
                             )
-                            print(f"[Scheduler] Segundo bloque FAILED (request {sib['id']}): {msg2}")
+                            print(f"[Scheduler] Segundo bloque {st2} (request {sib['id']}): {msg2}")
                             processed_ids.add(sib["id"])
                         except Exception as e:
-                            print(f"[Scheduler] Error al marcar FAILED el segundo bloque {sib['id']}: {e}", file=sys.stderr)
+                            print(f"[Scheduler] Error al actualizar segundo bloque {sib['id']}: {e}", file=sys.stderr)
+
 
 
         elif action == "WAIT_RELEASE":
