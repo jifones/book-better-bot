@@ -50,6 +50,19 @@ class CartSummary:
     general_credit_available: int
     general_credit_max_applicable: int
 
+def _slot_debug_label(raw_slot: dict) -> str:
+    """
+    Devuelve un label legible para logs de depuración.
+    Prioriza slug, luego name y si no, unknown.
+    """
+    location = raw_slot.get("location") or {}
+    return (
+        location.get("slug")
+        or location.get("name")
+        or raw_slot.get("name")
+        or "unknown"
+    )
+
 class LiveBetterClient:
     HEADERS = {
         "Origin": "https://bookings.better.org.uk",
@@ -139,6 +152,30 @@ class LiveBetterClient:
 
         data = response.json().get("data", [])
 
+        logging.info(
+            "[Better] Slots RAW para %s %s-%s | venue=%s | activity=%s | total=%s",
+            activity_date.isoformat(),
+            start_time.strftime("%H:%M"),
+            end_time.strftime("%H:%M"),
+            venue.value,
+            activity.value,
+            len(data),
+        )
+
+        for s in data:
+            action = s.get("action_to_show") or {}
+            status = action.get("status")
+            spaces = s.get("spaces", 0)
+            label = _slot_debug_label(s)
+            logging.info(
+                "[Better][RAW] slot_id=%s | court=%s | spaces=%s | status=%s | pricing_option_id=%s",
+                s.get("id"),
+                label,
+                spaces,
+                status,
+                s.get("pricing_option_id"),
+            )
+
         # Filtrar solo slots con plazas libres y que se puedan reservar (status 'BOOK')
         filtered: list[dict] = []
         for s in data:
@@ -147,6 +184,24 @@ class LiveBetterClient:
             status = action.get("status")
             if spaces > 0 and status == "BOOK":
                 filtered.append(s)
+
+        logging.info(
+            "[Better] Slots BOOKABLE para %s %s-%s | total=%s",
+            activity_date.isoformat(),
+            start_time.strftime("%H:%M"),
+            end_time.strftime("%H:%M"),
+            len(filtered),
+        )
+
+        for s in filtered:
+            label = _slot_debug_label(s)
+            logging.info(
+                "[Better][BOOKABLE] slot_id=%s | court=%s | spaces=%s | pricing_option_id=%s",
+                s.get("id"),
+                label,
+                s.get("spaces", 0),
+                s.get("pricing_option_id"),
+            )
 
         if not filtered:
             logging.info(

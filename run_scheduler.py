@@ -196,6 +196,77 @@ def pick_best_slot_for_request(req: dict, slots: list):
         name = getattr(fallback, "name", "unknown")
         return fallback, name
 
+def build_slot_candidates_for_request(req: dict, slots: list, forced_court_number: str | None = None) -> list:
+    """
+    Construye la lista de candidatos en orden:
+    1) forced_court_number si viene informado
+    2) preferred_court_name_1 / 2 / 3
+    3) resto de slots conocidos
+    4) slots sin número claro
+    """
+    prefs_raw = [
+        req.get("preferred_court_name_1"),
+        req.get("preferred_court_name_2"),
+        req.get("preferred_court_name_3"),
+    ]
+    preferred_numbers: list[str] = []
+
+    if forced_court_number:
+        preferred_numbers.append(str(forced_court_number).strip())
+
+    for pref in prefs_raw:
+        num = extract_court_number_from_string(pref) if pref else None
+        if num and num not in preferred_numbers:
+            preferred_numbers.append(num)
+
+    slots_by_court: dict[str, list] = {}
+    unknown_slots: list = []
+
+    for s in slots:
+        num = get_slot_court_number(s)
+        if num:
+            slots_by_court.setdefault(num, []).append(s)
+        else:
+            unknown_slots.append(s)
+
+    candidates: list = []
+    used_ids: set[int] = set()
+
+    for pref_num in preferred_numbers:
+        for s in slots_by_court.get(pref_num, []):
+            if s.id not in used_ids:
+                candidates.append(s)
+                used_ids.add(s.id)
+
+    for _, group in slots_by_court.items():
+        for s in group:
+            if s.id not in used_ids:
+                candidates.append(s)
+                used_ids.add(s.id)
+
+    for s in unknown_slots:
+        if s.id not in used_ids:
+            candidates.append(s)
+            used_ids.add(s.id)
+
+    return candidates
+
+def extract_booked_court_number_from_message(message: str) -> str | None:
+    """
+    Intenta sacar el número de cancha desde mensajes tipo:
+    'BOOKING_OK: reservado Court 10 para 2026-03-12 19:00-20:00, order_id=...'
+    """
+    if not message:
+        return None
+
+    marker = "reservado Court "
+    if marker in message:
+        tail = message.split(marker, 1)[1]
+        digits = "".join(ch for ch in tail if ch.isdigit())
+        return digits or None
+
+    return None
+
 # ADD: utilidades para hora local y espera
 def london_now(tz_name: str = "Europe/London"):
     return datetime.now(zoneinfo.ZoneInfo(tz_name))
@@ -283,7 +354,7 @@ def probe_better_slots_for_request(req: dict) -> str:
     )
 
 
-def book_best_slot_for_request(req: dict) -> str:
+def book_best_slot_for_request(req: dict, forced_court_number: str | None = None) -> str:
     try:
         username, password = resolve_credentials_for_request(req)
     except Exception as e:
@@ -334,50 +405,31 @@ def book_best_slot_for_request(req: dict) -> str:
             f"{start_pretty}-{end_pretty}."
         )
 
-    # 2) Ordenar candidatos: preferidas primero, luego el resto
-    prefs_raw = [
+    # 2) Ordenar candidatos: forced court primero, luego preferidas, luego el resto
+    candidates = build_slot_candidates_for_request(
+        req,
+        slots,
+        forced_court_number=forced_court_number,
+    )
+
+    prefs_log = [
         req.get("preferred_court_name_1"),
         req.get("preferred_court_name_2"),
         req.get("preferred_court_name_3"),
     ]
-    preferred_numbers: list[str] = []
-    for pref in prefs_raw:
-        num = extract_court_number_from_string(pref) if pref else None
-        if num:
-            preferred_numbers.append(num)
+    print(
+        f"[Booking] Request {req['id']} preferencias={prefs_log} | forced_court_number={forced_court_number}"
+    )
+    print(
+        f"[Booking] Request {req['id']} candidates_total={len(candidates)}"
+    )
 
-    # agrupamos slots por número de cancha (si se puede extraer)
-    slots_by_court: dict[str, list] = {}
-    unknown_slots: list = []
-    for s in slots:
-        num = get_slot_court_number(s)
-        if num:
-            slots_by_court.setdefault(num, []).append(s)
-        else:
-            unknown_slots.append(s)
-
-    candidates: list = []
-    used_ids: set[int] = set()
-
-    # primero: slots de canchas preferidas en orden
-    for pref_num in preferred_numbers:
-        for s in slots_by_court.get(pref_num, []):
-            if s.id not in used_ids:
-                candidates.append(s)
-                used_ids.add(s.id)
-
-    # luego: cualquier otro slot restante
-    for num, group in slots_by_court.items():
-        for s in group:
-            if s.id not in used_ids:
-                candidates.append(s)
-                used_ids.add(s.id)
-
-    # finalmente: los que no tienen número claro
-    for s in unknown_slots:
-        if s.id not in used_ids:
-            candidates.append(s)
-            used_ids.add(s.id)
+    for idx, cand in enumerate(candidates, start=1):
+        cand_num = get_slot_court_number(cand)
+        cand_label = f"Court {cand_num}" if cand_num else getattr(cand, 'name', 'unknown')
+        print(
+            f"[Booking] Candidate #{idx} | slot_id={cand.id} | court={cand_label} | location_id={cand.location_id}"
+        )
 
     # 3) Intentar reservar: si un slot queda "already full", probamos el siguiente
     max_attempts = min(8, len(candidates))
@@ -388,9 +440,16 @@ def book_best_slot_for_request(req: dict) -> str:
         chosen_num = get_slot_court_number(chosen_slot)
         chosen_label = f"Court {chosen_num}" if chosen_num else getattr(chosen_slot, "name", "unknown")
 
+        print(
+            f"[Booking] Intentando request {req['id']} | slot_id={chosen_slot.id} | court={chosen_label} | intento={i+1}/{max_attempts}"
+        )
+
         try:
             # idempotencia: si ya está en el carrito, no lo agregamos de nuevo
             if client.cart_contains_slot_id(chosen_slot.id):
+                print(
+                    f"[Booking] Slot ya estaba en carrito | request {req['id']} | slot_id={chosen_slot.id} | court={chosen_label}"
+                )
                 summary = client.get_cart_summary()
                 cart = ActivityCart(id=summary.id, amount=summary.total, source=summary.source)
             else:
@@ -405,6 +464,9 @@ def book_best_slot_for_request(req: dict) -> str:
 
             if "already full" in (msg or "").lower():
                 last_full_msg = msg
+                print(
+                    f"[Booking] Slot full al add_to_cart | request {req['id']} | slot_id={chosen_slot.id} | court={chosen_label} | motivo={msg}"
+                )
                 continue  # PROBAR SIGUIENTE SLOT
 
             return (
@@ -469,8 +531,20 @@ def book_best_slot_for_request(req: dict) -> str:
 
         # ✅ ÉXITO REAL: en cuanto tenemos order_id, parchamos la request y salimos
         booked_court_name = chosen_label
-        booked_start = f"{start_pretty}:00"
-        booked_end = f"{end_pretty}:00"
+        booked_start = datetime.combine(
+            target_date,
+            datetime.strptime(start_pretty, "%H:%M").time(),
+            tzinfo=zoneinfo.ZoneInfo("Europe/London"),
+        ).isoformat()
+        booked_end = datetime.combine(
+            target_date,
+            datetime.strptime(end_pretty, "%H:%M").time(),
+            tzinfo=zoneinfo.ZoneInfo("Europe/London"),
+        ).isoformat()
+
+        print(
+            f"[Booking] Reserva OK | request {req['id']} | court={booked_court_name} | slot_id={chosen_slot.id} | order_id={order_id}"
+        )
 
         try:
             update_request_booked(
@@ -488,6 +562,16 @@ def book_best_slot_for_request(req: dict) -> str:
             f"{start_pretty}-{end_pretty}, order_id={order_id}."
         )
 
+    if last_full_msg:
+        return (
+            f"BOOKING_NO_SLOTS: todos los candidatos terminaron full para {req['target_date']} "
+            f"{start_pretty}-{end_pretty}. last_full={last_full_msg}"
+        )
+
+    return (
+        f"BOOKING_NO_SLOTS: sin candidatos reservables para {req['target_date']} "
+        f"{start_pretty}-{end_pretty}."
+    )
 
 def book_with_credit_for_request(req: dict) -> str:
     """
@@ -707,8 +791,15 @@ def main() -> int:
             if new_status == "BOOKED":
                 sib = find_consecutive_sibling(req, requests)
                 if sib:
-                    print(f"[Scheduler] Intentando bloque contiguo para {sib['id']} ({sib['target_start_time'][:5]}-{sib['target_end_time'][:5]})…")
-                    msg2 = book_best_slot_for_request(sib)
+                    first_court_number = extract_booked_court_number_from_message(message)
+                    print(
+                        f"[Scheduler] Intentando bloque contiguo para {sib['id']} ({sib['target_start_time'][:5]}-{sib['target_end_time'][:5]})… "
+                        f"forced_court_number={first_court_number}"
+                    )
+                    msg2 = book_best_slot_for_request(
+                        sib,
+                        forced_court_number=first_court_number,
+                    )
 
                     if msg2.startswith("BOOKING_OK"):
                         try:

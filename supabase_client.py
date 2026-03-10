@@ -164,8 +164,8 @@ def update_request_seen(
 def update_request_booked(
     request_id: str,
     booked_court_name: str,
-    booked_slot_start: str,  # 'HH:MM:SS'
-    booked_slot_end: str,    # 'HH:MM:SS'
+    booked_slot_start: str,  # ISO datetime con zona, ej. '2026-03-12T19:00:00+00:00'
+    booked_slot_end: str,    # ISO datetime con zona, ej. '2026-03-12T20:00:00+00:00'
     last_error: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Marca la request como BOOKED y guarda los campos booked_*."""
