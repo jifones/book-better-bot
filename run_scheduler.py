@@ -260,12 +260,19 @@ def extract_booked_court_number_from_message(message: str) -> str | None:
         return None
 
     marker = "reservado Court "
-    if marker in message:
-        tail = message.split(marker, 1)[1]
-        digits = "".join(ch for ch in tail if ch.isdigit())
-        return digits or None
+    if marker not in message:
+        return None
 
-    return None
+    tail = message.split(marker, 1)[1].lstrip()
+
+    court_digits: list[str] = []
+    for ch in tail:
+        if ch.isdigit():
+            court_digits.append(ch)
+        else:
+            break
+
+    return "".join(court_digits) or None
 
 # ADD: utilidades para hora local y espera
 def london_now(tz_name: str = "Europe/London"):
